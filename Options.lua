@@ -204,7 +204,7 @@ local function BuildContent()
     Check(c, "Streaks move right", R, -286,
         function() return db().streakDir == "right" end,
         function(v) db().streakDir = v and "right" or "left" end,
-        "Toward the next stack. Off: they rush left, past you.")
+        "Toward the next stack (the default). Off: they rush left, past you.")
 
     Button(c, "Play the demo", R + 4, -334, 130, function() SlashCmdList.PLAINSTRIDE("demo") end)
     Button(c, "Reset position", R + 140, -334, 130, function()

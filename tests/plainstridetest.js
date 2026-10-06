@@ -807,14 +807,15 @@ scenario('wind streaks race through the fill while running, more with more stack
   end
   local function xs() local o = {} for i, t in ipairs(D.stack.Streaks) do o[i] = t.x end return o end
   local before = xs() T.step(0.05)
-  local after, left = xs(), 0
-  for i = 1, #after do if after[i] < before[i] then left = left + 1 end end
-  check(left >= 3, "they move left by default: " .. left)
-  T.slash("streaks right")
-  T.step(0.05) before = xs() T.step(0.05) after = xs()
-  local right = 0
+  local after, right = xs(), 0
   for i = 1, #after do if after[i] > before[i] then right = right + 1 end end
-  check(ns.db.streakDir == "right" and right >= 3, "and right when asked: " .. right)
+  check(ns.db.streakDir == "right" and right >= 3, "they move right by default: " .. right)
+  T.slash("streaks left")
+  T.step(0.05) before = xs() T.step(0.05) after = xs()
+  local left = 0
+  for i = 1, #after do if after[i] < before[i] then left = left + 1 end end
+  check(ns.db.streakDir == "left" and left >= 3, "and left when asked: " .. left)
+  T.slash("streaks right")
   T.step(3)
   for _, t in ipairs(D.stack.Streaks) do
     if t.alpha > 0 then check(t.x <= 441 + 0.01, "a rightward streak stays inside the fill") end
@@ -855,8 +856,12 @@ scenario('options page in Options > AddOns, the window in combat, and the minima
 `);
 
 scenario('an unmoved 0.1.0 bar moves up off the action bars', NS + `
-  PlainstrideDB = { point = { "BOTTOM", "UIParent", "BOTTOM", 0, 190 }, portrait = "model" }
+  PlainstrideDB = { point = { "BOTTOM", "UIParent", "BOTTOM", 0, 190 }, portrait = "model", streakDir = "left" }
   T.login()
+  check(ns.db.streakDir == "right", "streaks moved to the new default once")
+  T.slash("streaks left")
+  T.fire("ADDON_LOADED", "Plainstride")
+  check(ns.db.streakDir == "left", "a later choice of left is kept")
   check(ns.db.point[5] == 260, "moved up: " .. tostring(ns.db.point[5]))
   check(ns.db.portrait == nil, "old portrait setting dropped")
 `);

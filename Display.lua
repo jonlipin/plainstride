@@ -806,8 +806,8 @@ function D.Render(now)
     if cfg.streaks == false then view.wind = 0 end -- switched off: gone at once
     local wind = view.wind
     local edge = FILL_W * fillTo / MAX
-    -- left (default): wind rushing past you; right: the bar surging toward the next stack
-    local rightward = cfg.streakDir == "right"
+    -- right (default): the bar surging toward the next stack; left: wind rushing past you
+    local rightward = cfg.streakDir ~= "left"
     for i, t in ipairs(stack.Streaks) do
         local active = wind > 0.02 and i <= math.ceil(STREAKS * (0.3 + 0.7 * wind))
         if active and edge > 8 then

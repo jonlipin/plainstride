@@ -44,7 +44,7 @@ local defaults = {
     hideInCombat = true,  -- off: the bar stays in a fight, frozen at the last count
     bgAlpha = 1,          -- opacity of the empty part of the bars
     streaks = true,       -- wind streaks through the fill while running
-    streakDir = "left",   -- wind streaks: "left" (rushing past you) or "right" (toward the next stack)
+    streakDir = "right",  -- wind streaks: "right" (toward the next stack) or "left" (rushing past you)
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
     minimapAngle = 220,
@@ -481,6 +481,11 @@ events:SetScript("OnEvent", function(self, event, arg1)
         local p = db.point
         if p and p[1] == "BOTTOM" and p[3] == "BOTTOM" and p[4] == 0 and p[5] == 190 then p[5] = 260 end
         db.portrait = nil
+        -- the streaks' default became "right": move saved files that still hold the old default
+        if not db.streakRightDefault then
+            db.streakDir = "right"
+            db.streakRightDefault = true
+        end
         db.version = VERSION
         ns.db = db
         ns.Display.Build()

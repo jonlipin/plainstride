@@ -45,8 +45,8 @@ right-click: lock or unlock the bar, drag: move it round the minimap), or `/plai
 - Tooltip on hover: stacks, speed, the countdown and the rules
 - A red mark where one hit would leave you (players report a hit halves your stacks)
 - Dock under the player frame
-- Wind streaks on or off, and their direction: left (rushing past you, the default) or right
-  (toward the next stack)
+- Wind streaks on or off, and their direction: right (toward the next stack, the default) or left
+  (rushing past you)
 - Hide in combat (on by default; off keeps the bar up, frozen at your last count)
 - Print recent stack changes (`/plainstride log`), with each hit compared to half
 - Play the demo (40 seconds, any character), reset position and size
