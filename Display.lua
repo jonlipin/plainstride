@@ -731,7 +731,19 @@ function D.Render(now)
         end
     end
 
-    -- quiet when there is nothing to show
+    -- quiet when there is nothing to show: dimmed, or (fadeEmpty) faded right out. Setting off
+    -- brings it back at once, since the first stack's countdown starts then. While unlocked it
+    -- never fades below half, so it can still be found and dragged.
     local idle = (stacks or 0) <= 0 and not state.moving and not ns.inCombat() and not state.demo
-    frame:SetAlpha(idle and cfg.idleAlpha or 1)
+    local target = 1
+    if idle then target = cfg.fadeEmpty and 0 or (cfg.idleAlpha or 0.45) end
+    if not cfg.locked then target = math.max(target, 0.5) end
+    local a = view.alpha or target
+    if target < a then
+        a = math.max(target, a - dt / 0.8)  -- fade out over most of a second
+    else
+        a = math.min(target, a + dt / 0.15) -- and back in quickly
+    end
+    view.alpha = a
+    frame:SetAlpha(a)
 end

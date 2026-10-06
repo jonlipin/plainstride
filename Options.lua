@@ -150,6 +150,10 @@ local function BuildContent()
         function() return db().layout == "one" end,
         function(v) db().layout = v and "one" or "two" D.Layout() end,
         "The countdown runs inside the stack bar: the next segment fills while you run, your top one drains red when you stop. Off: a cast bar under the stack bar.")
+    Check(c, "Fade out at 0 stacks", L, -336,
+        function() return db().fadeEmpty end,
+        function(v) db().fadeEmpty = v end,
+        "Hidden while you stand with no stacks; back as soon as you move. Off: the opacity above.")
 
     Heading(c, "Other", R, -44)
     Check(c, "Minimap button", R, -66,

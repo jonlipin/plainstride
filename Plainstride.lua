@@ -36,6 +36,7 @@ local defaults = {
     idleAlpha = 0.45,
     showTimer = true,
     showCount = true,     -- "Plainsrunning 12 / 30" in the middle of the bar
+    fadeEmpty = false,    -- fade the bar right out at 0 stacks while standing
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
     minimapAngle = 220,
@@ -515,7 +516,7 @@ local function describe()
 end
 
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | count | timer | layout | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | count | timer | fade | layout | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -533,6 +534,8 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.scale = clamp(n, 0.4, 2) D.Layout() print("scale " .. db.scale .. ".")
     elseif cmd == "idle" and n then
         db.idleAlpha = clamp(n, 0, 1) print("opacity at 0 stacks: " .. db.idleAlpha .. ".")
+    elseif cmd == "fade" then
+        db.fadeEmpty = not db.fadeEmpty print("fade out at 0 stacks " .. (db.fadeEmpty and "on" or "off") .. ".")
     elseif cmd == "count" then
         db.showCount = not db.showCount print("stack count text " .. (db.showCount and "on" or "off") .. ".")
     elseif cmd == "timer" then

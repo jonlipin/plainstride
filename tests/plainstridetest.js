@@ -643,6 +643,24 @@ scenario('one-bar layout: the next segment fills while running, the top one drai
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
+scenario('fade out at 0 stacks: gone while standing empty, back when moving', NS + `
+  T.login()
+  T.aura = nil T.speed = 0
+  T.step(1.5)
+  check(math.abs(D.frame.alpha - 0.45) < 0.01, "dimmed by default: " .. D.frame.alpha)
+  T.slash("fade")
+  T.step(0.15)
+  check(D.frame.alpha > 0.01 and D.frame.alpha < 0.45, "fading: " .. D.frame.alpha)
+  T.step(1)
+  check(D.frame.alpha == 0, "faded right out: " .. D.frame.alpha)
+  T.speed = 7
+  T.step(0.2)
+  check(D.frame.alpha == 1, "back when moving: " .. D.frame.alpha)
+  T.speed = 0 T.step(1.5)
+  T.slash("unlock") T.step(0.5)
+  check(D.frame.alpha == 0.5, "never hidden while unlocked: " .. D.frame.alpha)
+`);
+
 scenario('reaching 30: starburst and sheen, the cast bar shows full', NS + `
   T.login()
   T.aura = 29 T.speed = 9
