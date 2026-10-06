@@ -1,13 +1,17 @@
 -- Plainstride display: Blizzard's own interface art, put together the way Blizzard builds it.
+-- Two layouts (db.layout): "two" (the stack bar with the cast bar under it, the default) or "one"
+-- (the countdown runs inside the stack bar).
 --
---   stack bar  the profession skill bar (Professions-skillbar-bg/-frame/-mask) with the animated
+--   the bar    the profession skill bar (Professions-skillbar-bg/-frame) with the animated
 --              Herbalism fill flipbook and its flare. Blizzard_ProfessionsTemplates is load on
 --              demand, so the template itself is never used (loading a Blizzard addon taints it);
 --              the same pieces are rebuilt here from its XML.
---   tick bar   a real CastingBarFrameTemplate (Blizzard_UIPanels_Game, loaded at startup) with its
---              events and scripts switched off: the client's own cast bar art, spark and finish /
---              interrupt effects, driven by our clocks. A plain look-alike stands in if the
---              template cannot be made.
+--   tick bar   (two bars) a real CastingBarFrameTemplate with its events and scripts switched off:
+--              the client's own cast bar art, spark and finish / interrupt effects, driven by our
+--              clocks. A plain look-alike stands in if the template cannot be made.
+--   the tick   (one bar) lives in the stack bar: while you run the next segment fills toward your next stack
+--              (a green glow over it, the cast bar's spark at its edge); when you stop your top
+--              segment turns red (the cast bar's interrupted fill) and drains toward the loss.
 --   streaks    wind lines racing through the filled part of the bar while you run, more of them
 --              and faster the more stacks you have (the cast bar's channel wisp glow, stretched thin).
 local ADDON, ns = ...
@@ -21,7 +25,7 @@ local FILL_W, FILL_H = 441, 18        -- its Fill
 local FILL_X, FILL_Y = 5, -3
 local TICK_H = 11                     -- the cast bar's natural height
 local TOTAL_W = BAR_W
-local TOTAL_H = 48
+local TWO_BAR_H = 48                  -- the stack bar, a gap, and the cast bar under it
 
 local STREAKS = 9
 
@@ -31,6 +35,7 @@ local view = {
     ghost = nil,
     barFrac = 0,
     mode = nil,
+    segArt = nil,
     tickArt = nil,
     flowing = nil,
 }
@@ -40,13 +45,6 @@ D.view = view
 local function db() return ns.db end
 local function clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return hi end return v end
 local function easeOut(t) t = clamp(t, 0, 1) return 1 - (1 - t) * (1 - t) * (1 - t) end
-
-local function try(fn, ...)
-    if type(fn) ~= "function" then return nil end
-    local ok, a = pcall(fn, ...)
-    if ok then return a end
-    return nil
-end
 
 -- The first font object this client has, so SetText never meets a font string without a font.
 local function newFont(parent, layer, ...)
@@ -121,7 +119,7 @@ local function play(g)
 end
 
 ------------------------------------------------------------------------
--- The stack bar: Blizzard's profession skill bar with the Herbalism fill
+-- The bar: Blizzard's profession skill bar with the Herbalism fill
 ------------------------------------------------------------------------
 local function buildStackBar(parent)
     local s = CreateFrame("Frame", nil, parent)
@@ -174,10 +172,24 @@ local function buildStackBar(parent)
     s.Flare:SetPoint("RIGHT", s.Clip, "RIGHT", 0, 0)
     s.Flare:SetAlpha(0)
 
-    -- above the fill: the lost chunk, the stack marks and the frame art
+    -- above the fill: the tick segment, the lost chunk, the stack marks and the frame art
     s.Over = CreateFrame("Frame", nil, s)
     s.Over:SetAllPoints(s)
     s.Over:SetFrameLevel(s:GetFrameLevel() + 2)
+
+    -- the segment being earned (green glow) or about to go (red), and the spark at its edge
+    s.Seg = s.Over:CreateTexture(nil, "ARTWORK", nil, 2)
+    s.Seg:SetHeight(FILL_H - 2)
+    s.Seg:Hide()
+    s.Spark = s.Over:CreateTexture(nil, "ARTWORK", nil, 7)
+    setAtlas(s.Spark, "ui-castingbar-pip", false)
+    s.Spark:SetSize(6, FILL_H + 6)
+    s.Spark:Hide()
+    s.SegFlash = s.Over:CreateTexture(nil, "ARTWORK", nil, 4)
+    s.SegFlash:SetBlendMode("ADD")
+    setAtlas(s.SegFlash, "ui-castingbar-full-glow-channel", false)
+    s.SegFlash:SetHeight(FILL_H + 4)
+    s.SegFlash:SetAlpha(0)
 
     -- what was just lost, lingering on top of the empty part of the bar
     s.Ghost = s.Over:CreateTexture(nil, "ARTWORK", nil, 3)
@@ -239,6 +251,9 @@ local function buildStackBar(parent)
     s.Text = newFont(textHolder, "OVERLAY", "Number12FontOutline", "GameFontHighlightOutline", "GameFontHighlight")
     s.Text:SetPoint("CENTER", s.FillArea, "CENTER", 0, 0)
     s.Text:SetJustifyH("CENTER")
+    s.Timer = newFont(textHolder, "OVERLAY", "Number12FontOutline", "GameFontHighlightSmall", "GameFontHighlight")
+    s.Timer:SetPoint("RIGHT", s.FillArea, "RIGHT", -6, 0)
+    s.Timer:SetJustifyH("RIGHT")
 
     -- animations
     s.FillAnim = group(s.Fill, "REPEAT")
@@ -259,6 +274,9 @@ local function buildStackBar(parent)
     s.HitGlowAnim = group(s.HitGlow)
     alpha(s.HitGlowAnim, 0, 1, 0.0, 1)
     alpha(s.HitGlowAnim, 1, 0, 1.0, 2)
+    s.SegFlashAnim = group(s.SegFlash)
+    alpha(s.SegFlashAnim, 0, 1, 0.05, 1)
+    alpha(s.SegFlashAnim, 1, 0, 0.5, 2, nil, "OUT")
     s.MaxAnim = group(s.Starburst)
     scale(s.MaxAnim, 1, 0.5, 0.1, 1)
     scale(s.MaxAnim, 1, 2, 0.5, 1, 0.34)
@@ -278,7 +296,7 @@ local function buildStackBar(parent)
 end
 
 ------------------------------------------------------------------------
--- The tick bar: the client's cast bar
+-- The tick bar (two-bar layout): the client's cast bar
 ------------------------------------------------------------------------
 local function buildFallbackTick(parent)
     local b = CreateFrame("StatusBar", nil, parent)
@@ -304,6 +322,8 @@ local function buildFallbackTick(parent)
     return b
 end
 
+-- A real CastingBarFrameTemplate (Blizzard_UIPanels_Game, loaded at startup) with its events and
+-- scripts switched off; a plain look-alike if the template cannot be made.
 local function buildTickBar(parent)
     local ok, b = pcall(CreateFrame, "StatusBar", nil, parent, "CastingBarFrameTemplate")
     if not ok or not b then
@@ -326,7 +346,6 @@ local function buildTickBar(parent)
     b:SetMinMaxValues(0, 1)
     b:SetValue(0)
     b:SetSize(FILL_W, TICK_H)
-    b:Show()
     if b.Flash then
         b.Flash:SetAlpha(0)
         b.Flash:Show()
@@ -363,6 +382,26 @@ local function setTickArt(key)
     end
 end
 
+local function oneBar()
+    return db().layout == "one"
+end
+
+-- The tick segment's look: a green glow while earning, the cast bar's red fill while losing.
+local function setSegArt(kind)
+    if view.segArt == kind then return end
+    view.segArt = kind
+    local seg = stack.Seg
+    if kind == "decay" then
+        setAtlas(seg, "ui-castingbar-interrupted", false)
+        seg:SetBlendMode("BLEND")
+        seg:SetVertexColor(1, 1, 1)
+    else
+        setAtlas(seg, "Cast_Channel_WispGlow", false)
+        seg:SetBlendMode("ADD")
+        seg:SetVertexColor(0.8, 1, 0.7)
+    end
+end
+
 ------------------------------------------------------------------------
 -- Building, layout, lock
 ------------------------------------------------------------------------
@@ -381,13 +420,23 @@ end
 function D.Layout()
     if not frame then return end
     frame:SetScale(clamp(db().scale or 0.75, 0.4, 2))
+    local one = oneBar()
+    frame:SetSize(TOTAL_W, one and BAR_H or TWO_BAR_H)
+    tick:SetShown(not one)
+    if one then
+        if tick.Flash then tick.Flash:SetAlpha(0) end
+    else
+        stack.Seg:Hide()
+        stack.Spark:Hide()
+        stack.Timer:SetText("")
+    end
 end
 
 function D.Build()
     local p = db().point or ns.defaults.point
     frame = CreateFrame("Frame", "PlainstrideFrame", UIParent)
     D.frame = frame
-    frame:SetSize(TOTAL_W, TOTAL_H)
+    frame:SetSize(TOTAL_W, TWO_BAR_H)
     frame:SetFrameStrata("MEDIUM")
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
@@ -418,6 +467,7 @@ function D.Build()
     stack = buildStackBar(content)
     stack:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
     D.stack = stack
+    setSegArt("gain")
 
     tick = buildTickBar(content)
     tick:SetPoint("TOPLEFT", stack, "TOPLEFT", FILL_X, -33)
@@ -462,19 +512,30 @@ end
 function D.Animate(from, to, kind, now)
     if not frame then return end
     if to > from then
-        view.tweenFrom, view.tweenTo, view.tweenStart = view.shown, to, now
-        view.tweenDur = 0.5 -- Blizzard's rank bar interpolates over half a second, easing out
+        if to - from == 1 and oneBar() then
+            -- the segment had already filled up as the tick ran: it simply becomes a stack
+            D.Snap(to)
+        else
+            view.tweenFrom, view.tweenTo, view.tweenStart = view.shown, to, now
+            view.tweenDur = 0.5 -- Blizzard's rank bar interpolates over half a second, easing out
+        end
+        -- the new stack's segment flashes with the cast bar's channel glow
+        stack.SegFlash:ClearAllPoints()
+        stack.SegFlash:SetPoint("LEFT", stack.FillArea, "LEFT", FILL_W * (to - 1) / MAX - 2, 0)
+        stack.SegFlash:SetWidth(FILL_W / MAX + 4)
+        play(stack.SegFlashAnim)
         if to >= MAX then
             stack.Flare:SetAlpha(0)
             play(stack.MaxAnim)
             play(stack.SheenAnim)
-            play(tick.FlashFade)
         else
             stack.FlareFadeOut:Stop()
             stack.Flare:SetAlpha(1)
             play(stack.FlareFadeOut)
+        end
+        if not oneBar() then
             play(tick.FlashFade)
-            if tick.ChannelFinish then play(tick.ChannelFinish) end
+            if tick.ChannelFinish and to < MAX then play(tick.ChannelFinish) end
         end
         return
     end
@@ -487,17 +548,18 @@ function D.Animate(from, to, kind, now)
         view.ghost = { from = top, to = to, start = now, hold = 0.45, dur = 0.55, atlas = "ui-castingbar-interrupted" }
         play(stack.GhostFlashAnim)
         play(stack.HitGlowAnim)
-        if tick.InterruptGlowAnim then play(tick.InterruptGlowAnim) end
+        if not oneBar() and tick.InterruptGlowAnim then play(tick.InterruptGlowAnim) end
         shake(1 + math.min(lost, 10) * 0.25)
         D.Float:SetText("-" .. lost)
         play(D.FloatAnim)
+    elseif oneBar() then
+        -- the red segment has already drained: a short ember where it was
+        view.ghost = { from = top, to = to, start = now, hold = 0, dur = 0.3, atlas = "ui-castingbar-interrupted" }
     else
         view.ghost = { from = top, to = to, start = now, hold = 0.1, dur = 0.4, atlas = "ui-castingbar-filling-standard" }
         play(tick.FlashFade)
     end
-    if stack.Ghost then
-        setAtlas(stack.Ghost, view.ghost.atlas, false)
-    end
+    setAtlas(stack.Ghost, view.ghost.atlas, false)
 end
 
 ------------------------------------------------------------------------
@@ -515,12 +577,53 @@ function D.Render(now)
         if t >= 1 then view.tweenDur, view.shown = 0, view.tweenTo end
     end
     local shown = clamp(view.shown, 0, MAX)
-    local p = shown / MAX
+
+    -- the tick, in the bar itself
+    local stacks = state.stacks
+    local mode, frac, left = ns.clocks(now, stacks)
+    view.mode = mode
+    if math.abs(frac - view.barFrac) > 0.5 then view.barFrac = frac
+    else view.barFrac = view.barFrac + (frac - view.barFrac) * 0.5 end
+    local bf = clamp(view.barFrac, 0, 1)
+    local one = oneBar()
+    local segLo, segHi, fillTo = nil, nil, shown
+    if not one then
+        -- two bars: the stack bar shows whole stacks, the cast bar below shows the tick
+    elseif mode == "gain" and shown < MAX and view.tweenDur == 0 then
+        segLo, segHi = shown, math.min(MAX, shown + bf)
+        fillTo = segHi
+    elseif mode == "decay" and shown >= 1 then
+        segLo, segHi = shown - 1, shown - 1 + bf
+        fillTo = segHi
+    end
+    view.fillTo = fillTo
+    if segLo and segHi - segLo > 0.01 then
+        setSegArt(mode)
+        if mode == "decay" then
+            stack.Seg:SetAlpha(0.85)
+        else
+            local pulse = math.sin(now * 6)
+            stack.Seg:SetAlpha(0.35 + 0.25 * pulse * pulse)
+        end
+        stack.Seg:ClearAllPoints()
+        stack.Seg:SetPoint("LEFT", stack.FillArea, "LEFT", FILL_W * segLo / MAX, 0)
+        stack.Seg:SetWidth(math.max(0.5, FILL_W * (segHi - segLo) / MAX))
+        stack.Seg:Show()
+        stack.Spark:ClearAllPoints()
+        stack.Spark:SetPoint("CENTER", stack.FillArea, "LEFT", FILL_W * segHi / MAX, 0)
+        stack.Spark:Show()
+    else
+        stack.Seg:Hide()
+        stack.Spark:Hide()
+    end
+
+    local p = fillTo / MAX
     if p > 0 then
         stack.Fill:Show()
         stack.Clip:SetWidth(math.max(0.01, FILL_W * p))
     else
         stack.Fill:Hide()
+        stack.Clip:SetWidth(0.01)
         stack.Flare:SetAlpha(0)
     end
 
@@ -550,10 +653,10 @@ function D.Render(now)
     -- wind streaks: only while running, more and faster with more stacks
     local dt = math.min(0.1, now - (view.lastFrame or now))
     view.lastFrame = now
-    local power = (state.moving and (state.stacks or 0) > 0) and ((state.stacks or 0) / MAX) or 0
+    local power = (state.moving and (stacks or 0) > 0) and ((stacks or 0) / MAX) or 0
     view.wind = (view.wind or 0) + (power - (view.wind or 0)) * math.min(1, dt * 3)
     local wind = view.wind
-    local edge = FILL_W * shown / MAX
+    local edge = FILL_W * fillTo / MAX
     for i, t in ipairs(stack.Streaks) do
         local active = wind > 0.02 and i <= math.ceil(STREAKS * (0.3 + 0.7 * wind))
         if active and edge > 8 then
@@ -572,49 +675,58 @@ function D.Render(now)
     end
 
     -- the fill flows while you run and rests while you stand
-    local flowing = state.moving and (state.stacks or 0) > 0
+    local flowing = state.moving and (stacks or 0) > 0
     if flowing ~= view.flowing then
         view.flowing = flowing
         if flowing then stack.FillAnim:Play() else stack.FillAnim:Stop() end
     end
 
-    local stacks = state.stacks
+    -- texts: the count in the middle, the countdown at the right end
     if stacks then
         stack.Text:SetText(string.format("Plainsrunning  %d / %d", stacks, MAX))
     else
         stack.Text:SetText("Plainsrunning")
     end
-
-    -- the tick bar
-    local mode, frac, left = ns.clocks(now, stacks)
-    view.mode = mode
-    if math.abs(frac - view.barFrac) > 0.5 then view.barFrac = frac
-    else view.barFrac = view.barFrac + (frac - view.barFrac) * 0.5 end
-    local art = mode
-    if mode == "decay" and left and left < 0.35 then art = "urgent" end
-    if mode == "hold" then art = "gain" end
-    setTickArt(TICK_ART[art] and art or "idle")
-    tick:SetValue(clamp(view.barFrac, 0, 1))
-    local sparkOn = (mode == "gain" or mode == "decay") and view.barFrac > 0.01 and view.barFrac < 0.99
-    if tick.Spark then
-        tick.Spark:ClearAllPoints()
-        tick.Spark:SetPoint("CENTER", tick, "LEFT", FILL_W * clamp(view.barFrac, 0, 1), 0)
-        tick.Spark:SetShown(sparkOn)
-    end
-    if tick.Text then
-        local text = ""
-        if cfg.showTimer then
-            if mode == "max" then
-                text = "Full speed"
-            elseif mode == "gain" then
-                text = (left and left > 0) and string.format("Next stack  %.1f", left) or "Next stack"
-            elseif mode == "decay" then
-                text = (left and left > 0) and string.format("Losing a stack  %.1f", left) or "Losing a stack"
-            elseif state.source == "demo" then
-                text = "Demo"
-            end
+    local text = ""
+    if one and cfg.showTimer then
+        if mode == "max" then
+            text = "|cffffd100MAX|r"
+        elseif mode == "gain" then
+            text = (left and left > 0) and string.format("|cff8ff07a+1|r %.1f", left) or "|cff8ff07a+1|r"
+        elseif mode == "decay" then
+            text = (left and left > 0) and string.format("|cffff5a3a-1|r %.1f", left) or "|cffff5a3a-1|r"
         end
-        tick.Text:SetText(text)
+    end
+    stack.Timer:SetText(text)
+
+    -- the cast bar (two bars)
+    if not one then
+        local art = mode
+        if mode == "decay" and left and left < 0.35 then art = "urgent" end
+        if mode == "hold" then art = "gain" end
+        setTickArt(TICK_ART[art] and art or "idle")
+        tick:SetValue(bf)
+        local sparkOn = (mode == "gain" or mode == "decay") and bf > 0.01 and bf < 0.99
+        if tick.Spark then
+            tick.Spark:ClearAllPoints()
+            tick.Spark:SetPoint("CENTER", tick, "LEFT", FILL_W * bf, 0)
+            tick.Spark:SetShown(sparkOn)
+        end
+        if tick.Text then
+            local t = ""
+            if cfg.showTimer then
+                if mode == "max" then
+                    t = "Full speed"
+                elseif mode == "gain" then
+                    t = (left and left > 0) and string.format("Next stack  %.1f", left) or "Next stack"
+                elseif mode == "decay" then
+                    t = (left and left > 0) and string.format("Losing a stack  %.1f", left) or "Losing a stack"
+                elseif state.source == "demo" then
+                    t = "Demo"
+                end
+            end
+            tick.Text:SetText(t)
+        end
     end
 
     -- quiet when there is nothing to show

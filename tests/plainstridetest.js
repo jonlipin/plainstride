@@ -617,6 +617,32 @@ scenario('hidden in combat, back after it with a fresh count and no animation fo
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
+scenario('one-bar layout: the next segment fills while running, the top one drains red when standing', NS + `
+  T.login()
+  check(ns.db.layout == "two" and D.tick.shown, "two bars by default")
+  T.slash("layout")
+  check(ns.db.layout == "one" and not D.tick.shown, "one bar: the cast bar is hidden")
+  T.aura = 6 T.speed = 7.42
+  T.step(0.3)
+  T.aura = 7 T.step(0.1)
+  check(math.abs(v.shown - 7) < 0.01, "a single gain snaps (the segment had filled): " .. v.shown)
+  T.step(2.5)
+  check(D.stack.Seg.shown and D.stack.Seg.atlas == "Cast_Channel_WispGlow", "green segment while earning")
+  check(D.stack.Spark.shown, "spark at its edge")
+  local w = D.stack.Clip.width
+  check(w > 441 * 7 / 30 + 1 and w < 441 * 8 / 30, "the fill runs into the 8th segment: " .. w)
+  check(D.stack.Timer.text:find("+1"), "countdown in the bar: " .. tostring(D.stack.Timer.text))
+  T.speed = 0
+  T.step(0.8)
+  check(D.stack.Seg.atlas == "ui-castingbar-interrupted", "red segment while standing: " .. tostring(D.stack.Seg.atlas))
+  local w2 = D.stack.Clip.width
+  check(w2 < 441 * 7 / 30 and w2 > 441 * 6 / 30, "the 7th segment is draining: " .. w2)
+  check(D.stack.Timer.text:find("-1"), "loss countdown: " .. tostring(D.stack.Timer.text))
+  T.slash("layout")
+  check(ns.db.layout == "two" and D.tick.shown and not D.stack.Seg.shown, "back to two bars")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
 scenario('reaching 30: starburst and sheen, the cast bar shows full', NS + `
   T.login()
   T.aura = 29 T.speed = 9
@@ -704,7 +730,7 @@ scenario('the demo plays through and ends', NS + `
 
 scenario('slash commands', NS + `
   T.login()
-  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "help", "reset", "debug" }) do
+  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "help", "reset", "debug" }) do
     T.slash(c)
   end
   check(ns.db.scale == 0.75, "reset scale")

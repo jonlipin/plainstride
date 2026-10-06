@@ -32,9 +32,11 @@ right-click: lock or unlock the bar, drag: move it round the minimap), or `/plai
 
 - Lock the bar (untick to drag it anywhere)
 - Size and opacity at 0 stacks
-- Countdown text on the cast bar
+- Countdown text
+- One bar: the countdown runs inside the stack bar (the next segment fills while you run, your
+  top segment drains red when you stop) instead of on a cast bar under it
 - Minimap button
 - Play the demo (40 seconds, any character), reset position and size
 
-Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | timer | minimap | demo | reset | debug`.
+Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | timer | layout | minimap | demo | reset | debug`.
 `/pstride` works too.

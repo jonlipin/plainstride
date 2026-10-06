@@ -35,6 +35,7 @@ local defaults = {
     scale = 0.75,
     idleAlpha = 0.45,
     showTimer = true,
+    layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
     minimapAngle = 220,
     point = { "BOTTOM", "UIParent", "BOTTOM", 0, 260 },
@@ -513,7 +514,7 @@ local function describe()
 end
 
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | timer | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | timer | layout | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -546,6 +547,10 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         D.frame:SetPoint(p[1], UIParent, p[3], p[4], p[5])
         D.Layout()
         print("position and size reset.")
+    elseif cmd == "layout" then
+        db.layout = (db.layout == "one") and "two" or "one"
+        D.Layout()
+        print(db.layout == "one" and "one bar: the countdown runs inside the stack bar." or "two bars: the stack bar with the cast bar under it.")
     elseif cmd == "minimap" then
         db.minimap = not db.minimap
         ns.Options.UpdateMinimapButton()
