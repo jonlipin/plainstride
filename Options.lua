@@ -198,20 +198,23 @@ local function BuildContent()
         function(v) db().dock = v D.Layout() end,
         "As wide as your player frame, right under it. Off: where you dragged it.")
 
-    Check(c, "Streaks move right", R, -258,
+    Check(c, "Wind streaks", R, -258,
+        function() return db().streaks ~= false end,
+        function(v) db().streaks = v end)
+    Check(c, "Streaks move right", R, -286,
         function() return db().streakDir == "right" end,
         function(v) db().streakDir = v and "right" or "left" end,
         "Toward the next stack. Off: they rush left, past you.")
 
-    Button(c, "Play the demo", R + 4, -306, 130, function() SlashCmdList.PLAINSTRIDE("demo") end)
-    Button(c, "Reset position", R + 140, -306, 130, function()
+    Button(c, "Play the demo", R + 4, -334, 130, function() SlashCmdList.PLAINSTRIDE("demo") end)
+    Button(c, "Reset position", R + 140, -334, 130, function()
         SlashCmdList.PLAINSTRIDE("reset")
         Refresh()
     end)
-    Button(c, "Print recent stack changes", R + 4, -336, 200, function() ns.printLog(15) end)
+    Button(c, "Print recent stack changes", R + 4, -364, 200, function() ns.printLog(15) end)
 
     local status = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    status:SetPoint("TOPLEFT", R + 6, -374)
+    status:SetPoint("TOPLEFT", R + 6, -402)
     status:SetWidth(260)
     status:SetJustifyH("LEFT")
     refreshers[#refreshers + 1] = function()

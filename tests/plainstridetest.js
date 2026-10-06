@@ -810,7 +810,7 @@ scenario('wind streaks race through the fill while running, more with more stack
   local after, left = xs(), 0
   for i = 1, #after do if after[i] < before[i] then left = left + 1 end end
   check(left >= 3, "they move left by default: " .. left)
-  T.slash("streaks")
+  T.slash("streaks right")
   T.step(0.05) before = xs() T.step(0.05) after = xs()
   local right = 0
   for i = 1, #after do if after[i] > before[i] then right = right + 1 end end
@@ -819,6 +819,12 @@ scenario('wind streaks race through the fill while running, more with more stack
   for _, t in ipairs(D.stack.Streaks) do
     if t.alpha > 0 then check(t.x <= 441 + 0.01, "a rightward streak stays inside the fill") end
   end
+  T.slash("streaks")
+  T.step(0.05)
+  check(ns.db.streaks == false and lit() == 0, "switched off: none at once: " .. lit())
+  T.slash("streaks")
+  T.step(1)
+  check(lit() > 0, "back on")
   T.speed = 0 T.step(3)
   check(lit() == 0, "none while standing: " .. lit())
 `);

@@ -43,6 +43,7 @@ local defaults = {
     dock = false,         -- sit under the player frame, as wide as it
     hideInCombat = true,  -- off: the bar stays in a fight, frozen at the last count
     bgAlpha = 1,          -- opacity of the empty part of the bars
+    streaks = true,       -- wind streaks through the fill while running
     streakDir = "left",   -- wind streaks: "left" (rushing past you) or "right" (toward the next stack)
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
@@ -565,7 +566,7 @@ function ns.printLog(count)
 end
 
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | background <0-1> | count | timer | fade | fill [name] | combat | streaks | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | background <0-1> | count | timer | fade | fill [name] | combat | streaks [left|right] | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -630,8 +631,14 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         refreshVisibility()
         print(db.hideInCombat and "the bar hides in combat." or "the bar stays in combat, frozen at your last count.")
     elseif cmd == "streaks" then
-        db.streakDir = (db.streakDir == "right") and "left" or "right"
-        print("wind streaks move " .. (db.streakDir == "right" and "right, toward the next stack." or "left, rushing past you."))
+        local arg = string.lower(rest or "")
+        if arg == "left" or arg == "right" then
+            db.streakDir = arg
+            print("wind streaks move " .. (arg == "right" and "right, toward the next stack." or "left, rushing past you."))
+        else
+            db.streaks = db.streaks == false
+            print("wind streaks " .. (db.streaks and "on" or "off") .. ".")
+        end
     elseif cmd == "marker" then
         db.hitMarker = not db.hitMarker print("hit marker " .. (db.hitMarker and "on" or "off") .. ".")
     elseif cmd == "tooltip" then

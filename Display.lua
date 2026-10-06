@@ -803,6 +803,7 @@ function D.Render(now)
     view.lastFrame = now
     local power = (state.moving and (stacks or 0) > 0) and ((stacks or 0) / MAX) or 0
     view.wind = (view.wind or 0) + (power - (view.wind or 0)) * math.min(1, dt * 3)
+    if cfg.streaks == false then view.wind = 0 end -- switched off: gone at once
     local wind = view.wind
     local edge = FILL_W * fillTo / MAX
     -- left (default): wind rushing past you; right: the bar surging toward the next stack
