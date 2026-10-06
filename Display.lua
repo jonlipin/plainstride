@@ -579,9 +579,8 @@ function D.Render(now)
     end
 
     local stacks = state.stacks
-    local mark = (state.source == "estimate") and "~" or ""
     if stacks then
-        stack.Text:SetText(string.format("Plainsrunning  %s%d / %d", mark, stacks, MAX))
+        stack.Text:SetText(string.format("Plainsrunning  %d / %d", stacks, MAX))
     else
         stack.Text:SetText("Plainsrunning")
     end

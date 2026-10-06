@@ -127,7 +127,7 @@ local function BuildContent()
     intro:SetPoint("TOPLEFT", L, 0)
     intro:SetWidth(W - 20)
     intro:SetJustifyH("LEFT")
-    intro:SetText("Tracks the tauren Plainsrunning racial: +1% speed for every 5 seconds of moving, up to 30 stacks. Standing still and taking hits cost stacks.")
+    intro:SetText("Tracks the tauren Plainsrunning racial: +1% speed for every 5 seconds of moving, up to 30 stacks. Standing still and taking hits cost stacks. The bar hides in combat (the game does not show the buff to addons there) and comes back with your stacks when the fight ends.")
 
     Heading(c, "Bar", L, -44)
     Check(c, "Lock the bar", L, -66,
@@ -167,9 +167,7 @@ local function BuildContent()
     status:SetJustifyH("LEFT")
     refreshers[#refreshers + 1] = function()
         local st = ns.state
-        local where = ({ aura = "read from the buff", speed = "read from your run speed",
-            estimate = "estimated (the client shows neither the buff nor your speed)",
-            demo = "the demo" })[st.source] or "not seen yet"
+        local where = ({ aura = "read from the buff", demo = "the demo" })[st.source] or "not seen yet"
         status:SetText(string.format("Now: %s stacks, %s.\n/plainstride debug prints the details.",
             st.stacks and tostring(st.stacks) or "no", where))
     end

@@ -19,10 +19,8 @@ Standing still or taking damage takes stacks away. Plainstride shows all of it:
 
 ## Where the numbers come from
 
-Out of combat the buff is read directly. In a fight the client hides buffs from addons, so the
-stack count is worked out from your run speed, which moves with the stacks; it is calibrated
-against the buff whenever both can be read. If neither can be read (mounted, or where the client
-hides your stats), the count carries on as an estimate and is marked with `~`.
+The buff is read directly. In combat the game hides it from addons and nothing else follows the
+stacks, so the bar hides when a fight starts and comes back with your stacks when it ends.
 
 The timers follow the game: stacks change on the racial's one second beat, which Plainstride
 learns from the changes it sees.

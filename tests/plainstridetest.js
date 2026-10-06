@@ -576,58 +576,9 @@ scenario('a hit while moving: red ghost, shake, floating loss, glow', NS + `
   check(D.stack.HitGlowAnim.plays == 1 and D.tick.InterruptGlowAnim.plays == 1, "interrupt glows")
 `);
 
-scenario('in combat the count comes from the run speed, hits included', NS + `
-  T.login()
-  T.aura = 12 T.speed = 7.84
-  T.step(0.3)
-  T.combat = true T.auraMode = "hidden"
-  T.fire("PLAYER_REGEN_DISABLED")
-  T.step(0.3)
-  check(st.stacks == 12 and st.source == "speed", "12 from speed: " .. tostring(st.stacks) .. " " .. st.source)
-  T.aura = 13 T.step(0.1)
-  check(st.stacks == 13, "gain seen through the speed")
-  T.aura = 6 T.step(0.1)
-  check(st.stacks == 6 and ns.db.log[#ns.db.log].kind == "hit", "a hit seen through the speed")
-`);
 
-scenario('calibration: a base other than 7 is learned from the aura', NS + `
-  T.login()
-  T.baseRun = 7.7  -- some other speed bonus that stacks with this one
-  T.aura = 10 T.speed = 1
-  T.step(0.3)
-  T.combat = true T.auraMode = "hidden"
-  T.aura = 11 T.step(0.1)
-  check(st.stacks == 11 and st.source == "speed", "11 with a calibrated base: " .. tostring(st.stacks) .. " " .. st.source)
-`);
 
-scenario('a speed jump that cannot be Plainsrunning is not believed', NS + `
-  T.login()
-  T.aura = 5 T.speed = 7.35
-  T.step(0.3)
-  T.combat = true T.auraMode = "hidden"
-  T.step(0.1)
-  T.run = 7 * 1.25
-  T.step(0.2)
-  check(st.stacks ~= 25, "not 25")
-  check(not st.speedTrusted, "speed marked untrusted")
-  check(st.source == "estimate", "estimating: " .. st.source)
-`);
 
-scenario('secret speed in a fight: the estimate carries on, marked ~', NS + `
-  T.login()
-  T.aura = 8 T.speed = 7.56
-  T.step(0.3)
-  T.combat = true T.auraMode = "hidden" T.speedMode = "secret"
-  T.fire("PLAYER_STARTED_MOVING")
-  T.step(0.3)
-  check(st.source == "estimate", "estimate")
-  check(D.stack.Text.text:find("~"), "marked ~: " .. tostring(D.stack.Text.text))
-  T.step(5.5)
-  check(st.stacks == 9, "counted a stack on: " .. tostring(st.stacks))
-  T.fire("PLAYER_STOPPED_MOVING")
-  T.step(3)
-  check(st.stacks < 9, "counted down while standing: " .. tostring(st.stacks))
-`);
 
 scenario('secret aura table, secret stacks, secret IsFalling, raising APIs: no secret is touched', NS + `
   T.login()
@@ -642,14 +593,28 @@ scenario('secret aura table, secret stacks, secret IsFalling, raising APIs: no s
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
-scenario('mounted: the run speed says nothing', NS + `
+
+scenario('hidden in combat, back after it with a fresh count and no animation for the fight', NS + `
   T.login()
-  T.aura = 4 T.speed = 7.28
-  T.step(0.3)
-  T.combat = true T.auraMode = "hidden" T.mounted = true T.run = 7 * 1.6
-  T.step(0.3)
-  check(st.source ~= "speed", "not read from a mount's speed")
-  check(st.stacks == 4, "kept 4: " .. tostring(st.stacks))
+  T.aura = 12 T.speed = 7.84
+  T.step(0.5)
+  check(st.stacks == 12, "12 before the fight")
+  T.combat = true T.auraMode = "hidden"
+  T.fire("PLAYER_REGEN_DISABLED")
+  check(not D.frame.shown, "hidden in combat")
+  T.aura = 5
+  T.step(2)
+  check(st.stacks == 12, "nothing read in combat: " .. tostring(st.stacks))
+  local logged = #ns.db.log
+  T.combat = false T.auraMode = "plain"
+  T.fire("PLAYER_REGEN_ENABLED")
+  check(D.frame.shown, "shown again")
+  check(st.stacks == 5 and st.source == "aura", "re-read 5 from the buff: " .. tostring(st.stacks))
+  check(D.Shake.plays == 0 and v.ghost == nil and D.FloatAnim.plays == 0, "no hit animation for the fight")
+  check(#ns.db.log == logged, "the fight is not logged as a change")
+  check(math.abs(v.shown - 5) < 0.01, "segments snapped to 5")
+  T.step(1)
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
 scenario('reaching 30: starburst and sheen, the cast bar shows full', NS + `

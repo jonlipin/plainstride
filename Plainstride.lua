@@ -6,16 +6,10 @@
 -- server makes lands on one shared 1 second beat; we learn where that beat falls from the changes
 -- we see.
 --
--- Where the stack count comes from, best first:
---   1. "aura":  C_UnitAuras.GetPlayerAuraBySpellID. Exact, but out of combat only: in a fight the
---               client hides auras from addons (RequiresNonSecretAura) and answers nil.
---   2. "speed": GetUnitSpeed's runSpeed. Plainsrunning is a plain speed modifier, so the run speed
---               moves with the stacks (7 yd/s * (1 + stacks/100) with nothing else on you). The
---               base is calibrated against the aura whenever both can be read, and the reading is
---               only believed when it lands on a whole stack. It is secret only where unit stats
---               are restricted (SecretWhenUnitStatsRestricted), which an ordinary fight is not.
---   3. "estimate": neither readable. We count on from the last known number with the same clocks
---               the bar shows; hits cannot be seen, so the number is marked "~".
+-- The stack count comes from the buff (C_UnitAuras.GetPlayerAuraBySpellID), which the client only
+-- shows an addon out of combat. In a fight nothing readable follows the stacks (the run speed was
+-- tried and does not update there), so the bar hides when combat starts and reads the buff afresh
+-- when it ends.
 --
 -- Every value from the client is checked with issecretvalue before it is compared, added or
 -- truth-tested: on this client that is the one safe thing to do with an unknown value.
@@ -25,7 +19,6 @@ local VERSION = "0.1.0"
 local BUFF_ID = 1299038
 local PASSIVE_ID = 1259918
 local MAX_STACKS = 30
-local BASE_RUN = 7          -- yd/s, the normal run speed
 local GAIN_TICK = 5         -- seconds of moving per stack (the tooltip's $s2)
 local DECAY_TICK = 1        -- the passive's period: one stack per beat while standing
 local DECAY_GRACE = 1       -- the first stack goes no sooner than this after you stop
@@ -45,7 +38,6 @@ local defaults = {
     minimap = true,
     minimapAngle = 220,
     point = { "BOTTOM", "UIParent", "BOTTOM", 0, 260 },
-    base = nil,             -- calibrated run speed with no stacks
     gainTicks = {},         -- measured seconds between gains, newest last
     decayTicks = {},
     log = {},
@@ -55,7 +47,7 @@ local defaults = {
 local db
 local state = {
     stacks = nil,           -- what we believe now
-    source = "none",        -- aura / speed / estimate / demo
+    source = "none",        -- aura / demo
     moving = false,
     zeroSince = nil,
     startAt = nil,          -- when you last set off
@@ -63,8 +55,6 @@ local state = {
     lastGainAt = nil,
     lastDecayAt = nil,
     eventMoving = false,    -- PLAYER_STARTED/STOPPED_MOVING, for when the speed cannot be read
-    lastRun = nil,
-    speedTrusted = true,    -- false while the run speed has been seen not to follow the aura
     beats = {},             -- (time mod 1) of recent changes: where the server's beat falls
     lastPoll = 0,
     demo = nil,
@@ -197,16 +187,6 @@ local function readAura()
     return n
 end
 
--- Run speed changes with a mount, a shapeshift, a vehicle or a taxi: then it says nothing about us.
-local function speedIsOurs()
-    if ask(IsMounted) then return false end
-    if ask(UnitOnTaxi, "player") then return false end
-    if ask(UnitInVehicle, "player") then return false end
-    local form = ask(GetShapeshiftForm)
-    if type(form) == "number" and form > 0 then return false end
-    return true
-end
-
 local function readSpeed()
     if type(GetUnitSpeed) ~= "function" then
         state.lastSpeed = "no GetUnitSpeed"
@@ -227,29 +207,6 @@ local function readSpeed()
     end
     state.lastSpeed = string.format("%.3f / run %.3f", current, run)
     return current, run
-end
-
-local function stacksFromSpeed(run)
-    if not run or run <= 0 or not state.speedTrusted or not speedIsOurs() then return nil end
-    local base = (db and db.base) or BASE_RUN
-    local x = (run / base - 1) * 100
-    local n = math.floor(x + 0.5)
-    if math.abs(x - n) > 0.25 or n < 0 or n > MAX_STACKS then return nil end
-    return n
-end
-
--- The aura and the run speed read together: learn the base, and notice when the speed does not
--- follow the stacks at all (another speed effect that does not stack with this one).
-local function calibrate(stacks, run)
-    if not run or run <= 0 or not speedIsOurs() then return end
-    local before = state.calibratedStacks
-    local beforeRun = state.calibratedRun
-    if before and beforeRun and before ~= stacks then
-        state.speedTrusted = math.abs(run - beforeRun) > 0.01
-    end
-    state.calibratedStacks, state.calibratedRun = stacks, run
-    local base = run / (1 + stacks / 100)
-    if base > 3 and base < 20 then db.base = base end
 end
 
 ------------------------------------------------------------------------
@@ -356,7 +313,7 @@ local function setStacks(now, n, source)
     if step > 0 then
         kind = "gain"
         -- one stack, gained after a whole cycle of the clock: that gap is a tick length
-        if step == 1 and state.lastGainAt and source ~= "estimate" and source ~= "demo" then
+        if step == 1 and state.lastGainAt and source ~= "demo" then
             local gap = now - state.lastGainAt
             if gap > 3 and gap < 8 then push(db.gainTicks, gap, 7) end
         end
@@ -368,36 +325,20 @@ local function setStacks(now, n, source)
             kind = "hit"
         else
             kind = "decay"
-            if step == -1 and not state.moving and state.lastDecayAt and source ~= "estimate" and source ~= "demo" then
+            if step == -1 and not state.moving and state.lastDecayAt and source ~= "demo" then
                 local gap = now - state.lastDecayAt
                 if gap > 0.5 and gap < 3 then push(db.decayTicks, gap, 7) end
             end
             state.lastDecayAt = now
         end
     end
-    if source ~= "estimate" and source ~= "demo" and kind ~= "hit" then
+    if source ~= "demo" and kind ~= "hit" then
         push(state.beats, now % 1, 8)
     end
     if source ~= "demo" then logChange(now, before, n, kind) end
     ns.Display.Animate(before, n, kind, now)
 end
 ns.setStacks = setStacks
-
--- No reading at all: carry the count on with the clocks.
-local function estimate(now)
-    if state.stacks == nil then return end
-    local mode, _, left = clocks(now, state.stacks)
-    if left ~= nil and left <= 0 then
-        if mode == "gain" and state.lastGainAt and now - state.lastGainAt >= gainTick() + OVERDUE_HOLD then
-            setStacks(now, math.min(MAX_STACKS, state.stacks + 1), "estimate")
-        elseif mode == "decay" then
-            setStacks(now, math.max(0, state.stacks - 1), "estimate")
-        end
-    elseif mode == "gain" and not state.lastGainAt and state.startAt and now - state.startAt >= gainTick() then
-        setStacks(now, math.min(MAX_STACKS, state.stacks + 1), "estimate")
-    end
-    state.source = "estimate"
-end
 
 ------------------------------------------------------------------------
 -- Demo: a scripted run so the bar can be seen on any character
@@ -454,34 +395,21 @@ end
 -- The loop
 ------------------------------------------------------------------------
 local function poll(now)
-    local current, run = readSpeed()
+    local current = readSpeed()
     updateMoving(now, current)
-    state.lastRun = run
-
+    -- nil: the client is not saying (combat); the last count stands until it does
     local aura = readAura()
     if aura ~= nil then
-        calibrate(aura, run)
         setStacks(now, aura, "aura")
-        return
     end
-    local fromSpeed = stacksFromSpeed(run)
-    if fromSpeed ~= nil then
-        -- a jump up of more than one cannot be Plainsrunning: something else changed the speed
-        if state.stacks and fromSpeed > state.stacks + 1 then
-            state.speedTrusted = false
-            estimate(now)
-            return
-        end
-        setStacks(now, fromSpeed, "speed")
-        return
-    end
-    estimate(now)
 end
 
 local function onUpdate(self, elapsed)
     local now = GetTime()
     if state.demo then
         runDemo(now)
+    elseif inCombat() then
+        return -- hidden in combat; PLAYER_REGEN_DISABLED hides the frame, this is belt and braces
     elseif now - state.lastPoll >= POLL then
         state.lastPoll = now
         poll(now)
@@ -492,7 +420,7 @@ end
 local function refreshVisibility()
     local frame = ns.Display.frame
     if not frame then return end
-    local show = state.demo ~= nil or (isTauren() and not ask(UnitOnTaxi, "player"))
+    local show = state.demo ~= nil or (isTauren() and not ask(UnitOnTaxi, "player") and not inCombat())
     frame:SetShown(show)
 end
 ns.refreshVisibility = refreshVisibility
@@ -505,6 +433,7 @@ events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_STARTED_MOVING")
 events:RegisterEvent("PLAYER_STOPPED_MOVING")
+events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("PLAYER_CONTROL_LOST")
 events:RegisterEvent("PLAYER_CONTROL_GAINED")
@@ -545,9 +474,15 @@ events:SetScript("OnEvent", function(self, event, arg1)
         state.eventMoving = true
     elseif event == "PLAYER_STOPPED_MOVING" then
         state.eventMoving = false
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        refreshVisibility()
     elseif event == "PLAYER_REGEN_ENABLED" then
-        state.speedTrusted = true -- the aura is readable again and will re-check it
-        state.calibratedStacks, state.calibratedRun = nil, nil
+        -- start over from what the buff says now: no gain, loss or hit animation for the fight
+        state.stacks, state.source = nil, "none"
+        state.lastGainAt, state.lastDecayAt, state.beats = nil, nil, {}
+        state.lastPoll = 0
+        if not state.demo then poll(GetTime()) end
+        refreshVisibility()
     elseif event == "PLAYER_CONTROL_LOST" or event == "PLAYER_CONTROL_GAINED" then
         refreshVisibility()
     end
@@ -561,8 +496,7 @@ local function describe()
     local mode, frac, left = clocks(now, state.stacks)
     print(string.format("v%s. Stacks %s from %s; %s; bar %s %.2f%s.", VERSION, tostring(state.stacks), state.source,
         state.moving and "moving" or "standing", mode, frac, left and string.format(", %.2fs left", left) or ""))
-    print("aura: " .. state.lastAura .. "; speed: " .. state.lastSpeed .. string.format("; base %.3f, speed %s.",
-        db.base or BASE_RUN, state.speedTrusted and "trusted" or "NOT trusted (another speed effect)"))
+    print("aura: " .. state.lastAura .. "; speed: " .. state.lastSpeed .. ". The bar hides in combat.")
     local phase = beatPhase()
     print(string.format("gain tick %.2fs (%d seen), loss tick %.2fs (%d seen), beat %s.", gainTick(), #db.gainTicks,
         decayTick(), #db.decayTicks, phase and string.format("%.2f", phase) or "not seen yet"))
