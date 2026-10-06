@@ -1,0 +1,13 @@
+## Interface: 16001
+## Title: Plainstride
+## Notes: Tauren Plainsrunning as a bar: stacks on a profession-style bar, the next stack (or the next loss) on a cast bar, animated gains, losses and hits.
+## Author: jonlipin
+## Version: 0.1.0
+## SavedVariables: PlainstrideDB
+## IconTexture: Interface\Icons\Spell_Nature_Swiftness
+## X-Category: Combat
+## X-Website: https://github.com/jonlipin/plainstride
+## X-License: MIT
+
+Plainstride.lua
+Display.lua
