@@ -32,6 +32,7 @@ right-click: lock or unlock the bar, drag: move it round the minimap), or `/plai
 
 - Lock the bar (untick to drag it anywhere)
 - Size and opacity at 0 stacks
+- Background opacity (the empty part of the bars)
 - Stack count text ("Plainsrunning 12 / 30")
 - Countdown text
 - Fade out at 0 stacks (back as soon as you move)
@@ -48,5 +49,5 @@ right-click: lock or unlock the bar, drag: move it round the minimap), or `/plai
 - Print recent stack changes (`/plainstride log`), with each hit compared to half
 - Play the demo (40 seconds, any character), reset position and size
 
-Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug`.
+Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | background 0-1 | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug`.
 `/pstride` works too.

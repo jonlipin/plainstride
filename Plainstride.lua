@@ -42,6 +42,7 @@ local defaults = {
     tooltip = true,       -- stacks, countdown and the rules on hover
     dock = false,         -- sit under the player frame, as wide as it
     hideInCombat = true,  -- off: the bar stays in a fight, frozen at the last count
+    bgAlpha = 1,          -- opacity of the empty part of the bars
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
     minimapAngle = 220,
@@ -563,7 +564,7 @@ function ns.printLog(count)
 end
 
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | background <0-1> | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -579,6 +580,8 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.locked = false D.ApplyLock() print("unlocked: drag the bar, then /plainstride lock.")
     elseif cmd == "scale" and n then
         db.scale = clamp(n, 0.4, 2) D.Layout() print("scale " .. db.scale .. ".")
+    elseif cmd == "background" and n then
+        db.bgAlpha = clamp(n, 0, 1) D.ApplyBackground() print("background opacity: " .. db.bgAlpha .. ".")
     elseif cmd == "idle" and n then
         db.idleAlpha = clamp(n, 0, 1) print("opacity at 0 stacks: " .. db.idleAlpha .. ".")
     elseif cmd == "fade" then
@@ -594,6 +597,8 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         print("demo running (about 40 seconds).")
     elseif cmd == "reset" then
         db.scale, db.idleAlpha, db.showTimer, db.showCount = defaults.scale, defaults.idleAlpha, true, true
+        db.bgAlpha = 1
+        D.ApplyBackground()
         local p = defaults.point
         db.point = { p[1], p[2], p[3], p[4], p[5] }
         D.frame:ClearAllPoints()

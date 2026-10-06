@@ -861,6 +861,10 @@ scenario('slash commands', NS + `
   for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "fade", "fade", "fill", "marker", "marker", "tooltip", "tooltip", "dock", "dock", "log", "combat", "combat", "help", "reset", "debug" }) do
     T.slash(c)
   end
+  T.slash("background 0.3")
+  check(math.abs(D.stack.Background.alpha - 0.3) < 0.001 and math.abs(D.tick.Background.alpha - 0.3) < 0.001, "background opacity on both bars: " .. tostring(D.stack.Background.alpha))
+  T.slash("reset")
+  check(D.stack.Background.alpha == 1, "reset brings the background back")
   check(ns.db.scale == 0.75, "reset scale")
   check(ns.db.showCount == true, "reset brings the count back")
   T.slash("count")

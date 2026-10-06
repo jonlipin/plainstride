@@ -10,7 +10,7 @@ ns.Options = O
 
 local TITLE = "Plainstride"
 local ICON = 236717 -- Plainsrunning's own icon (SpellMisc.SpellIconFileDataID)
-local W, H = 600, 470
+local W, H = 600, 520
 
 local content, window, settingsPage, settingsCategory
 local nativeOpenFailed = false
@@ -140,21 +140,24 @@ local function BuildContent()
     Slider(c, "Opacity at 0 stacks (out of combat)", L + 4, -164, 260, 0, 100, 5,
         function() return math.floor((db().idleAlpha or 0.45) * 100 + 0.5) end,
         function(v) db().idleAlpha = v / 100 end, "%d%%")
-    Check(c, "Stack count text", L, -216,
+    Slider(c, "Background opacity", L + 4, -216, 260, 0, 100, 5,
+        function() return math.floor((db().bgAlpha or 1) * 100 + 0.5) end,
+        function(v) db().bgAlpha = v / 100 D.ApplyBackground() end, "%d%%")
+    Check(c, "Stack count text", L, -268,
         function() return db().showCount ~= false end,
         function(v) db().showCount = v end)
-    Check(c, "Countdown text", L, -244,
+    Check(c, "Countdown text", L, -296,
         function() return db().showTimer end,
         function(v) db().showTimer = v end)
-    Check(c, "One bar", L, -272,
+    Check(c, "One bar", L, -324,
         function() return db().layout == "one" end,
         function(v) db().layout = v and "one" or "two" D.Layout() end,
         "The countdown runs inside the stack bar: the next segment fills while you run, your top one drains red when you stop. Off: a cast bar under the stack bar.")
-    Check(c, "Fade out at 0 stacks", L, -336,
+    Check(c, "Fade out at 0 stacks", L, -388,
         function() return db().fadeEmpty end,
         function(v) db().fadeEmpty = v end,
         "Hidden while you stand with no stacks; back as soon as you move. Off: the opacity above.")
-    Check(c, "Hide in combat", L, -382,
+    Check(c, "Hide in combat", L, -434,
         function() return db().hideInCombat ~= false end,
         function(v) db().hideInCombat = v if ns.refreshVisibility then ns.refreshVisibility() end end,
         "The game hides the buff from addons in a fight. Off: the bar stays, frozen at your last count.")

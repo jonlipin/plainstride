@@ -440,6 +440,14 @@ function D.FillInfo(key)
     return FILLS[1]
 end
 
+-- The empty part of the bars: the profession bar's background, and the cast bar's under it.
+function D.ApplyBackground()
+    if not stack then return end
+    local a = clamp(db().bgAlpha or 1, 0, 1)
+    stack.Background:SetAlpha(a)
+    if tick and tick.Background then tick.Background:SetAlpha(a) end
+end
+
 function D.ApplyFill()
     if not stack then return end
     local info = D.FillInfo(db().fill)
@@ -625,6 +633,7 @@ function D.Build()
 
     D.Layout()
     D.ApplyLock()
+    D.ApplyBackground()
     D.Snap(0)
 end
 
