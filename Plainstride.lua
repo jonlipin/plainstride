@@ -141,8 +141,13 @@ end
 ------------------------------------------------------------------------
 -- Reading the client
 ------------------------------------------------------------------------
+-- In a fight, from the combat events themselves: InCombatLockdown() still answers false while
+-- PLAYER_REGEN_DISABLED is being handled (the lockdown starts after it), which left the bar up.
+-- UnitAffectingCombat covers a /reload in the middle of a fight.
 local function inCombat()
-    return ask(InCombatLockdown) and true or false
+    if state.fighting ~= nil then return state.fighting end
+    if ask(InCombatLockdown) then return true end
+    return ask(UnitAffectingCombat, "player") and true or false
 end
 
 local function isTauren()
@@ -491,8 +496,10 @@ events:SetScript("OnEvent", function(self, event, arg1)
     elseif event == "PLAYER_STOPPED_MOVING" then
         state.eventMoving = false
     elseif event == "PLAYER_REGEN_DISABLED" then
+        state.fighting = true
         refreshVisibility()
     elseif event == "PLAYER_REGEN_ENABLED" then
+        state.fighting = false
         -- start over from what the buff says now: no gain, loss or hit animation for the fight
         state.stacks, state.source = nil, "none"
         state.lastGainAt, state.lastDecayAt, state.beats = nil, nil, {}

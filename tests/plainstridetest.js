@@ -398,6 +398,16 @@ function T.step(seconds, dt)
     end
   end
 end
+-- As the client does it: InCombatLockdown() is still false while PLAYER_REGEN_DISABLED runs,
+-- and already false when PLAYER_REGEN_ENABLED runs.
+function T.enterCombat()
+  T.fire("PLAYER_REGEN_DISABLED")
+  T.combat = true
+end
+function T.leaveCombat()
+  T.combat = false
+  T.fire("PLAYER_REGEN_ENABLED")
+end
 function T.login()
   T.fire("ADDON_LOADED", "Plainstride")
   T.fire("PLAYER_ENTERING_WORLD")
@@ -611,15 +621,15 @@ scenario('hidden in combat, back after it with a fresh count and no animation fo
   T.aura = 12 T.speed = 7.84
   T.step(0.5)
   check(st.stacks == 12, "12 before the fight")
-  T.combat = true T.auraMode = "hidden"
-  T.fire("PLAYER_REGEN_DISABLED")
+  T.auraMode = "hidden"
+  T.enterCombat()
   check(not D.frame.shown, "hidden in combat")
   T.aura = 5
   T.step(2)
   check(st.stacks == 12, "nothing read in combat: " .. tostring(st.stacks))
   local logged = #ns.db.log
-  T.combat = false T.auraMode = "plain"
-  T.fire("PLAYER_REGEN_ENABLED")
+  T.auraMode = "plain"
+  T.leaveCombat()
   check(D.frame.shown, "shown again")
   check(st.stacks == 5 and st.source == "aura", "re-read 5 from the buff: " .. tostring(st.stacks))
   check(D.Shake.plays == 0 and v.ghost == nil and D.FloatAnim.plays == 0, "no hit animation for the fight")
@@ -747,18 +757,17 @@ scenario('hide in combat can be turned off: the bar stays, frozen and marked', N
   T.aura = 9 T.speed = 7.6 T.step(0.3)
   T.slash("combat")
   check(ns.db.hideInCombat == false, "option off")
-  T.combat = true T.auraMode = "hidden"
-  T.fire("PLAYER_REGEN_DISABLED")
+  T.auraMode = "hidden"
+  T.enterCombat()
   check(D.frame.shown, "still shown in combat")
   T.step(1)
   check(st.stacks == 9, "frozen at 9")
   check(D.tick.Text.text == "In combat", "cast bar says In combat: " .. tostring(D.tick.Text.text))
-  T.combat = false T.auraMode = "plain" T.aura = 4
-  T.fire("PLAYER_REGEN_ENABLED")
+  T.auraMode = "plain" T.aura = 4
+  T.leaveCombat()
   check(st.stacks == 4, "re-read after the fight")
   T.slash("combat")
-  T.combat = true
-  T.fire("PLAYER_REGEN_DISABLED")
+  T.enterCombat()
   check(not D.frame.shown, "hidden again with the option on")
 `);
 
