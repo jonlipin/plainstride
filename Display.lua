@@ -805,14 +805,24 @@ function D.Render(now)
     view.wind = (view.wind or 0) + (power - (view.wind or 0)) * math.min(1, dt * 3)
     local wind = view.wind
     local edge = FILL_W * fillTo / MAX
+    -- left (default): wind rushing past you; right: the bar surging toward the next stack
+    local rightward = cfg.streakDir == "right"
     for i, t in ipairs(stack.Streaks) do
         local active = wind > 0.02 and i <= math.ceil(STREAKS * (0.3 + 0.7 * wind))
         if active and edge > 8 then
-            t.x = t.x - dt * (120 + 520 * wind) * t.pace
-            if t.x + t.len < 0 then
-                t.x = edge + 10 * ((i * 0.29) % 1)
+            local step = dt * (120 + 520 * wind) * t.pace
+            if rightward then
+                t.x = t.x + step
+                if t.x > edge then
+                    t.x = -t.len - 10 * ((i * 0.29) % 1) -- back in from the left end
+                end
+            else
+                t.x = t.x - step
+                if t.x + t.len < 0 then
+                    t.x = edge + 10 * ((i * 0.29) % 1)
+                end
+                if t.x > edge then t.x = edge end
             end
-            if t.x > edge then t.x = edge end
             t:ClearAllPoints()
             t:SetPoint("LEFT", stack.FillArea, "BOTTOMLEFT", t.x, 3 + (FILL_H - 6) * t.lane)
             t:SetSize(t.len * (0.6 + 0.6 * wind), 2 + wind)

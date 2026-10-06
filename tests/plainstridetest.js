@@ -805,6 +805,20 @@ scenario('wind streaks race through the fill while running, more with more stack
   for _, t in ipairs(D.stack.Streaks) do
     if t.alpha > 0 then check(t.x <= 441 + 0.01, "a streak stays inside the fill") end
   end
+  local function xs() local o = {} for i, t in ipairs(D.stack.Streaks) do o[i] = t.x end return o end
+  local before = xs() T.step(0.05)
+  local after, left = xs(), 0
+  for i = 1, #after do if after[i] < before[i] then left = left + 1 end end
+  check(left >= 3, "they move left by default: " .. left)
+  T.slash("streaks")
+  T.step(0.05) before = xs() T.step(0.05) after = xs()
+  local right = 0
+  for i = 1, #after do if after[i] > before[i] then right = right + 1 end end
+  check(ns.db.streakDir == "right" and right >= 3, "and right when asked: " .. right)
+  T.step(3)
+  for _, t in ipairs(D.stack.Streaks) do
+    if t.alpha > 0 then check(t.x <= 441 + 0.01, "a rightward streak stays inside the fill") end
+  end
   T.speed = 0 T.step(3)
   check(lit() == 0, "none while standing: " .. lit())
 `);
@@ -858,7 +872,7 @@ scenario('the demo plays through and ends', NS + `
 
 scenario('slash commands', NS + `
   T.login()
-  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "fade", "fade", "fill", "marker", "marker", "tooltip", "tooltip", "dock", "dock", "log", "combat", "combat", "help", "reset", "debug" }) do
+  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "fade", "fade", "fill", "marker", "marker", "tooltip", "tooltip", "dock", "dock", "log", "combat", "combat", "streaks", "streaks", "help", "reset", "debug" }) do
     T.slash(c)
   end
   T.slash("background 0.3")
