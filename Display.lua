@@ -682,7 +682,9 @@ function D.Render(now)
     end
 
     -- texts: the count in the middle, the countdown at the right end
-    if stacks then
+    if cfg.showCount == false then
+        stack.Text:SetText("")
+    elseif stacks then
         stack.Text:SetText(string.format("Plainsrunning  %d / %d", stacks, MAX))
     else
         stack.Text:SetText("Plainsrunning")

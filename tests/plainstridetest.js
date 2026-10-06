@@ -730,10 +730,17 @@ scenario('the demo plays through and ends', NS + `
 
 scenario('slash commands', NS + `
   T.login()
-  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "help", "reset", "debug" }) do
+  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "help", "reset", "debug" }) do
     T.slash(c)
   end
   check(ns.db.scale == 0.75, "reset scale")
+  check(ns.db.showCount == true, "reset brings the count back")
+  T.slash("count")
+  T.step(0.1)
+  check(ns.db.showCount == false and D.stack.Text.text == "", "count text off: " .. tostring(D.stack.Text.text))
+  T.slash("count")
+  T.step(0.1)
+  check(D.stack.Text.text:find("Plainsrunning"), "count text on")
   check(ns.db.locked, "locked")
   check(T.printed("aura:"), "debug printed")
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))

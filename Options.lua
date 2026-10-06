@@ -140,10 +140,13 @@ local function BuildContent()
     Slider(c, "Opacity at 0 stacks (out of combat)", L + 4, -164, 260, 0, 100, 5,
         function() return math.floor((db().idleAlpha or 0.45) * 100 + 0.5) end,
         function(v) db().idleAlpha = v / 100 end, "%d%%")
-    Check(c, "Countdown text", L, -216,
+    Check(c, "Stack count text", L, -216,
+        function() return db().showCount ~= false end,
+        function(v) db().showCount = v end)
+    Check(c, "Countdown text", L, -244,
         function() return db().showTimer end,
         function(v) db().showTimer = v end)
-    Check(c, "One bar", L, -244,
+    Check(c, "One bar", L, -272,
         function() return db().layout == "one" end,
         function(v) db().layout = v and "one" or "two" D.Layout() end,
         "The countdown runs inside the stack bar: the next segment fills while you run, your top one drains red when you stop. Off: a cast bar under the stack bar.")
