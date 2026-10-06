@@ -29,6 +29,26 @@ local TWO_BAR_H = 48                  -- the stack bar, a gap, and the cast bar 
 
 local STREAKS = 9
 
+-- The profession bars' animated fills (Skillbar_Fill_Flipbook_<kit> plus its flare). Each flipbook
+-- is two columns of 34 px frames; the row count comes from the atlas height when the client says,
+-- else from this table (atlas sizes in build 1.60.1.70235). tint colours the wind streaks.
+local FILLS = {
+    { key = "herbalism", name = "Herbalism", rows = 30, tint = { 0.85, 1, 0.75 } },
+    { key = "skinning", name = "Skinning", rows = 30, tint = { 0.75, 1, 0.95 } },
+    { key = "leatherworking", name = "Leatherworking", rows = 30, tint = { 1, 0.85, 0.6 } },
+    { key = "mining", name = "Mining", rows = 30, tint = { 0.9, 0.9, 1 } },
+    { key = "blacksmithing", name = "Blacksmithing", rows = 30, tint = { 1, 0.75, 0.5 } },
+    { key = "engineering", name = "Engineering", rows = 30, tint = { 1, 0.9, 0.6 } },
+    { key = "alchemy", name = "Alchemy", rows = 30, tint = { 0.8, 1, 0.8 } },
+    { key = "enchanting", name = "Enchanting", rows = 37, tint = { 0.9, 0.8, 1 } },
+    { key = "tailoring", name = "Tailoring", rows = 30, tint = { 1, 0.85, 0.95 } },
+    { key = "inscription", name = "Inscription", rows = 30, tint = { 0.85, 0.9, 1 } },
+    { key = "jewelcrafting", name = "Jewelcrafting", rows = 22, tint = { 0.8, 0.95, 1 } },
+    { key = "cooking", name = "Cooking", rows = 30, tint = { 1, 0.9, 0.7 } },
+    { key = "fishing", name = "Fishing", rows = 30, tint = { 0.75, 0.9, 1 } },
+}
+D.FILLS = FILLS
+
 local frame, stack, tick
 local view = {
     shown = 0, tweenFrom = 0, tweenTo = 0, tweenStart = 0, tweenDur = 0,
@@ -219,6 +239,13 @@ local function buildStackBar(parent)
         s.Dividers[i] = t
     end
 
+    -- where one hit would leave you: players report a hit halves your stacks
+    s.HitMark = s.Over:CreateTexture(nil, "ARTWORK", nil, 7)
+    if not setAtlas(s.HitMark, "ui-castingbar-pip-1x_red", false) then setAtlas(s.HitMark, "ui-castingbar-pip", false) end
+    s.HitMark:SetSize(6, FILL_H + 8)
+    s.HitMark:SetAlpha(0.85)
+    s.HitMark:Hide()
+
     s.Border = s.Over:CreateTexture(nil, "ARTWORK", nil, 6)
     setAtlas(s.Border, "Professions-skillbar-frame", true)
     s.Border:SetPoint("TOPLEFT")
@@ -265,6 +292,7 @@ local function buildStackBar(parent)
         fb:SetFlipBookFrames(60)
         fb:SetFlipBookFrameWidth(0)
         fb:SetFlipBookFrameHeight(0)
+        s.FlipBook = fb
     end
     s.FlareFadeOut = group(s.Flare)
     alpha(s.FlareFadeOut, 1, 0, 1.0, 1, nil, "OUT")
@@ -403,6 +431,82 @@ local function setSegArt(kind)
 end
 
 ------------------------------------------------------------------------
+-- The fill texture
+------------------------------------------------------------------------
+function D.FillInfo(key)
+    for _, f in ipairs(FILLS) do
+        if f.key == key then return f end
+    end
+    return FILLS[1]
+end
+
+function D.ApplyFill()
+    if not stack then return end
+    local info = D.FillInfo(db().fill)
+    local atlas = "skillbar_fill_flipbook_" .. info.key
+    if not setAtlas(stack.Fill, atlas, false) then
+        info = FILLS[1]
+        atlas = "skillbar_fill_flipbook_" .. info.key
+        setAtlas(stack.Fill, atlas, false)
+    end
+    setAtlas(stack.Flare, "skillbar_flare_" .. info.key, false)
+    local rows = info.rows
+    if C_Texture and C_Texture.GetAtlasInfo then
+        local ok, a = pcall(C_Texture.GetAtlasInfo, atlas)
+        if ok and type(a) == "table" and type(a.height) == "number" and a.height >= 34 then
+            rows = math.floor(a.height / 34 + 0.5)
+        end
+    end
+    stack.FillAnim:Stop()
+    stack.FlipBook:SetFlipBookRows(rows)
+    stack.FlipBook:SetFlipBookFrames(rows * 2)
+    view.flowing = nil -- Render starts the flipbook again if you are running
+    for _, t in ipairs(stack.Streaks) do t:SetVertexColor(info.tint[1], info.tint[2], info.tint[3]) end
+end
+
+------------------------------------------------------------------------
+-- Hover tooltip
+------------------------------------------------------------------------
+local function fillTooltip()
+    local st = ns.state
+    local stacks = st.stacks or 0
+    local mode, _, left = ns.clocks(GetTime(), st.stacks)
+    if ns.inCombat() then mode = "combat" end
+    GameTooltip:ClearLines()
+    GameTooltip:AddDoubleLine("Plainsrunning", string.format("%d / %d stacks (+%d%% speed)", stacks, MAX, stacks), 1, 0.82, 0, 1, 1, 1)
+    if mode == "gain" and left then
+        GameTooltip:AddLine(string.format("Next stack in %.1f s", left), 0.56, 0.94, 0.48)
+    elseif mode == "decay" and left then
+        GameTooltip:AddLine(string.format("Losing a stack in %.1f s", left), 1, 0.35, 0.23)
+    elseif mode == "max" then
+        GameTooltip:AddLine("Full speed", 1, 0.82, 0)
+    elseif mode == "combat" then
+        GameTooltip:AddLine("In combat: the count is from before the fight", 0.7, 0.7, 0.7, true)
+    end
+    if stacks >= 2 then
+        GameTooltip:AddLine(string.format("A hit would leave you about %d", math.floor(stacks / 2)), 1, 0.35, 0.23)
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("+1% speed for every 5 seconds of moving, up to +30%.", 0.8, 0.8, 0.8, true)
+    GameTooltip:AddLine("Standing still: about a second's grace, then 1 stack a second.", 0.8, 0.8, 0.8, true)
+    GameTooltip:AddLine("A hit halves your stacks (as players report it). Stacks still build in combat if nothing hits you.", 0.8, 0.8, 0.8, true)
+    GameTooltip:Show()
+end
+
+local function onEnter(self)
+    if db().tooltip == false then return end
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    view.tipShown = true
+    view.tipAt = 0
+    fillTooltip()
+end
+
+local function onLeave()
+    if view.tipShown then GameTooltip:Hide() end
+    view.tipShown = false
+end
+
+------------------------------------------------------------------------
 -- Building, layout, lock
 ------------------------------------------------------------------------
 local function savePosition()
@@ -410,16 +514,45 @@ local function savePosition()
     if p then db().point = { p, "UIParent", rp, x, y } end
 end
 
+local function docked()
+    return db().dock and PlayerFrame ~= nil
+end
+
+-- Locked (or docked): clicks go through the bar; with the tooltip on, the mouse still hovers it.
 function D.ApplyLock()
     if not frame then return end
-    local locked = db().locked
-    frame:EnableMouse(not locked)
-    frame.Unlocked:SetShown(not locked)
+    local movable = not db().locked and not docked()
+    frame:EnableMouse(movable)
+    if not movable and db().tooltip ~= false then
+        if frame.SetMouseMotionEnabled then pcall(frame.SetMouseMotionEnabled, frame, true) end
+        if frame.SetMouseClickEnabled then pcall(frame.SetMouseClickEnabled, frame, false) end
+    end
+    frame.Unlocked:SetShown(movable)
+end
+
+-- Docked: under the player frame, as wide as it; otherwise where you dragged it.
+function D.ApplyPosition()
+    if not frame then return end
+    frame:ClearAllPoints()
+    if docked() then
+        local pw = PlayerFrame:GetWidth() or 0
+        local ps = PlayerFrame:GetEffectiveScale() or 1
+        local us = UIParent:GetEffectiveScale() or 1
+        local scale = 0.75
+        if pw > 0 and us > 0 then scale = clamp(pw * ps * 0.92 / (TOTAL_W * us), 0.3, 2) end
+        frame:SetScale(scale)
+        frame:SetPoint("TOP", PlayerFrame, "BOTTOM", 0, 2)
+    else
+        frame:SetScale(clamp(db().scale or 0.75, 0.4, 2))
+        local p = db().point or ns.defaults.point
+        frame:SetPoint(p[1], UIParent, p[3], p[4], p[5])
+    end
 end
 
 function D.Layout()
     if not frame then return end
-    frame:SetScale(clamp(db().scale or 0.75, 0.4, 2))
+    D.ApplyPosition()
+    D.ApplyLock()
     local one = oneBar()
     frame:SetSize(TOTAL_W, one and BAR_H or TWO_BAR_H)
     tick:SetShown(not one)
@@ -441,7 +574,9 @@ function D.Build()
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
     frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", function(self) if not db().locked then self:StartMoving() end end)
+    frame:SetScript("OnDragStart", function(self) if not db().locked and not docked() then self:StartMoving() end end)
+    frame:SetScript("OnEnter", onEnter)
+    frame:SetScript("OnLeave", onLeave)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() savePosition() end)
     frame:SetPoint(p[1], UIParent, p[3], p[4], p[5])
 
@@ -468,6 +603,7 @@ function D.Build()
     stack:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
     D.stack = stack
     setSegArt("gain")
+    D.ApplyFill()
 
     tick = buildTickBar(content)
     tick:SetPoint("TOPLEFT", stack, "TOPLEFT", FILL_X, -33)
@@ -581,6 +717,9 @@ function D.Render(now)
     -- the tick, in the bar itself
     local stacks = state.stacks
     local mode, frac, left = ns.clocks(now, stacks)
+    if ns.inCombat() and not state.demo then
+        mode, frac, left = "combat", 0, nil -- the count is frozen: no countdown to show
+    end
     view.mode = mode
     if math.abs(frac - view.barFrac) > 0.5 then view.barFrac = frac
     else view.barFrac = view.barFrac + (frac - view.barFrac) * 0.5 end
@@ -681,6 +820,20 @@ function D.Render(now)
         if flowing then stack.FillAnim:Play() else stack.FillAnim:Stop() end
     end
 
+    -- where one hit would leave you
+    if cfg.hitMarker ~= false and (stacks or 0) >= 2 then
+        stack.HitMark:ClearAllPoints()
+        stack.HitMark:SetPoint("CENTER", stack.FillArea, "LEFT", FILL_W * math.floor(stacks / 2) / MAX, 0)
+        stack.HitMark:Show()
+    else
+        stack.HitMark:Hide()
+    end
+
+    if view.tipShown and now - (view.tipAt or 0) > 0.25 then
+        view.tipAt = now
+        fillTooltip()
+    end
+
     -- texts: the count in the middle, the countdown at the right end
     if cfg.showCount == false then
         stack.Text:SetText("")
@@ -691,7 +844,9 @@ function D.Render(now)
     end
     local text = ""
     if one and cfg.showTimer then
-        if mode == "max" then
+        if mode == "combat" then
+            text = "|cffaaaaaaIn combat|r"
+        elseif mode == "max" then
             text = "|cffffd100MAX|r"
         elseif mode == "gain" then
             text = (left and left > 0) and string.format("|cff8ff07a+1|r %.1f", left) or "|cff8ff07a+1|r"
@@ -717,7 +872,9 @@ function D.Render(now)
         if tick.Text then
             local t = ""
             if cfg.showTimer then
-                if mode == "max" then
+                if mode == "combat" then
+                    t = "In combat"
+                elseif mode == "max" then
                     t = "Full speed"
                 elseif mode == "gain" then
                     t = (left and left > 0) and string.format("Next stack  %.1f", left) or "Next stack"

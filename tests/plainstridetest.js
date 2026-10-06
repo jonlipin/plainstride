@@ -242,7 +242,8 @@ for m in ([[SetSize SetWidth SetHeight SetPoint ClearAllPoints SetAllPoints SetA
   GetPoint GetFrameLevel IsShown GetScript SetToFinalAlpha SetDuration SetOrder SetStartDelay SetFromAlpha
   SetToAlpha SetSmoothing SetLooping SetFlipBookRows SetFlipBookColumns SetFlipBookFrames SetFlipBookFrameWidth
   SetFlipBookFrameHeight SetScaleFrom SetScaleTo SetDegrees SetOffset Play Stop IsPlaying SetClipsChildren SetChecked SetOrientation SetValueStep SetObeyStepOnDrag
-  SetHighlightTexture RegisterForClicks SetToplevel SetParent SetTitle SetPortraitToAsset Raise SetJustifyV]]):gmatch("%S+") do KNOWN[m] = true end
+  SetHighlightTexture RegisterForClicks SetToplevel SetParent SetTitle SetPortraitToAsset Raise SetJustifyV
+  SetOwner AddLine AddDoubleLine ClearLines SetMouseMotionEnabled SetMouseClickEnabled]]):gmatch("%S+") do KNOWN[m] = true end
 
 local Widget = {}
 local function widget(kind, parent)
@@ -345,6 +346,17 @@ Settings = {
   end,
 }
 function HideUIPanel(f) f.shown = false end
+PlayerFrame = widget("Frame", UIParent) PlayerFrame.width = 232
+T.isPlayerMoving = nil
+function IsPlayerMoving() return T.isPlayerMoving end
+function Widget:AddLine(t) self.lines = self.lines or {} self.lines[#self.lines + 1] = t end
+function Widget:AddDoubleLine(a, b) self.lines = self.lines or {} self.lines[#self.lines + 1] = a .. " | " .. b end
+function Widget:ClearLines() self.lines = {} end
+function Widget:SetOwner(o) self.owner = o end
+function Widget:SetMouseMotionEnabled(v) self.motion = v end
+function Widget:SetMouseClickEnabled(v) self.clicks = v end
+function Widget:EnableMouse(v) self.mouse = v self.motion = v self.clicks = v end
+function T.tipHas(pat) for _, l in ipairs(GameTooltip.lines or {}) do if l:find(pat) then return true end end return false end
 function CreateFrame(kind, name, parent, template)
   if template and not T.templates[template] then error("unknown template " .. template) end
   local f = widget(kind, parent)
@@ -661,6 +673,95 @@ scenario('fade out at 0 stacks: gone while standing empty, back when moving', NS
   check(D.frame.alpha == 0.5, "never hidden while unlocked: " .. D.frame.alpha)
 `);
 
+scenario('bar texture choice: every profession fill, flare and flipbook rows', NS + `
+  T.login()
+  check(D.stack.Fill.atlas == "skillbar_fill_flipbook_herbalism", "herbalism by default")
+  T.slash("fill leather")
+  check(ns.db.fill == "leatherworking" and D.stack.Fill.atlas == "skillbar_fill_flipbook_leatherworking", "leatherworking: " .. tostring(D.stack.Fill.atlas))
+  check(D.stack.Flare.atlas == "skillbar_flare_leatherworking", "its flare")
+  T.slash("fill jewel")
+  local rows
+  for _, a in ipairs(D.stack.FillAnim.anims) do rows = a.calls.SetFlipBookRows end
+  check(ns.db.fill == "jewelcrafting", "jewelcrafting")
+  T.slash("fill")
+  check(ns.db.fill == "cooking", "fill with no name steps to the next: " .. ns.db.fill)
+  T.aura = 5 T.speed = 7.35 T.step(0.5)
+  check(D.stack.FillAnim.playing, "the new fill flows while running")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('hit marker at half the stacks, tooltip on hover, clicks pass through when locked', NS + `
+  T.login()
+  T.aura = 13 T.speed = 7.91 T.step(0.5)
+  check(D.stack.HitMark.shown, "hit marker shown")
+  local p = D.stack.HitMark.points[1]
+  check(p and math.abs(p[4] - 441 * 6 / 30) < 0.01, "at 6 (half of 13, rounded down): " .. tostring(p and p[4]))
+  T.slash("marker") T.step(0.1)
+  check(not D.stack.HitMark.shown, "marker off")
+  check(D.frame.motion == true and D.frame.clicks == false, "locked: hover works, clicks pass through")
+  D.frame.scripts.OnEnter(D.frame)
+  check(T.tipHas("13 / 30 stacks") and T.tipHas("Next stack"), "tooltip: stacks and countdown")
+  check(T.tipHas("would leave you about 6"), "tooltip: what a hit leaves")
+  D.frame.scripts.OnLeave(D.frame)
+  T.slash("tooltip")
+  check(D.frame.motion == false, "tooltip off: no hover either")
+`);
+
+scenario('dock under the player frame, then back where it was', NS + `
+  T.login()
+  T.slash("dock")
+  local p = D.frame.points[1]
+  check(p and p[2] == PlayerFrame and p[1] == "TOP", "anchored under the player frame")
+  check(math.abs(D.frame.calls.SetScale and 0 or 0) == 0, "scaled")
+  check(D.frame.mouse == false, "not draggable while docked")
+  T.slash("dock")
+  p = D.frame.points[1]
+  check(p and p[2] == UIParent and p[5] == 260, "back at its own spot")
+`);
+
+scenario('the log: recent stack changes, each hit compared with half', NS + `
+  T.login()
+  T.aura = 10 T.speed = 7.7 T.step(0.3)
+  T.aura = 11 T.step(0.1)
+  T.aura = 5 T.step(0.1)
+  T.prints = {}
+  T.slash("log")
+  check(T.printed("last 2 stack changes"), "header")
+  check(T.printed("10 %-> 11 gain"), "the gain")
+  check(T.printed("11 %-> 5 hit %(moving%), exactly half"), "the hit, halved")
+`);
+
+scenario('moving from IsPlayerMoving when the speed cannot be read', NS + `
+  T.login()
+  T.aura = 4 T.speedMode = "secret"
+  T.isPlayerMoving = true
+  T.step(0.3)
+  check(st.moving, "moving from IsPlayerMoving")
+  T.isPlayerMoving = false
+  T.step(0.6)
+  check(not st.moving, "stopped")
+`);
+
+scenario('hide in combat can be turned off: the bar stays, frozen and marked', NS + `
+  T.login()
+  T.aura = 9 T.speed = 7.6 T.step(0.3)
+  T.slash("combat")
+  check(ns.db.hideInCombat == false, "option off")
+  T.combat = true T.auraMode = "hidden"
+  T.fire("PLAYER_REGEN_DISABLED")
+  check(D.frame.shown, "still shown in combat")
+  T.step(1)
+  check(st.stacks == 9, "frozen at 9")
+  check(D.tick.Text.text == "In combat", "cast bar says In combat: " .. tostring(D.tick.Text.text))
+  T.combat = false T.auraMode = "plain" T.aura = 4
+  T.fire("PLAYER_REGEN_ENABLED")
+  check(st.stacks == 4, "re-read after the fight")
+  T.slash("combat")
+  T.combat = true
+  T.fire("PLAYER_REGEN_DISABLED")
+  check(not D.frame.shown, "hidden again with the option on")
+`);
+
 scenario('reaching 30: starburst and sheen, the cast bar shows full', NS + `
   T.login()
   T.aura = 29 T.speed = 9
@@ -748,7 +849,7 @@ scenario('the demo plays through and ends', NS + `
 
 scenario('slash commands', NS + `
   T.login()
-  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "help", "reset", "debug" }) do
+  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "layout", "layout", "count", "fade", "fade", "fill", "marker", "marker", "tooltip", "tooltip", "dock", "dock", "log", "combat", "combat", "help", "reset", "debug" }) do
     T.slash(c)
   end
   check(ns.db.scale == 0.75, "reset scale")

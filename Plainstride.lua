@@ -37,6 +37,11 @@ local defaults = {
     showTimer = true,
     showCount = true,     -- "Plainsrunning 12 / 30" in the middle of the bar
     fadeEmpty = false,    -- fade the bar right out at 0 stacks while standing
+    fill = "herbalism",   -- which profession bar's animated fill (Display FILLS)
+    hitMarker = true,     -- mark where one hit would leave you (half your stacks)
+    tooltip = true,       -- stacks, countdown and the rules on hover
+    dock = false,         -- sit under the player frame, as wide as it
+    hideInCombat = true,  -- off: the bar stays in a fight, frozen at the last count
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
     minimap = true,
     minimapAngle = 220,
@@ -225,7 +230,8 @@ local function updateMoving(now, current)
     if current then
         going = current > 0 or airborne
     else
-        going = state.eventMoving or airborne
+        -- the speed is not readable: the client's own moving flag, then its movement events
+        going = (ask(IsPlayerMoving) == true) or state.eventMoving or airborne
     end
     if going then
         state.zeroSince = nil
@@ -412,7 +418,13 @@ local function onUpdate(self, elapsed)
     if state.demo then
         runDemo(now)
     elseif inCombat() then
-        return -- hidden in combat; PLAYER_REGEN_DISABLED hides the frame, this is belt and braces
+        -- the buff cannot be read in a fight: keep only the movement up to date (the bar shows
+        -- "In combat" and the last count, when it is shown at all)
+        if db.hideInCombat ~= false then return end
+        if now - state.lastPoll >= POLL then
+            state.lastPoll = now
+            updateMoving(now, (readSpeed()))
+        end
     elseif now - state.lastPoll >= POLL then
         state.lastPoll = now
         poll(now)
@@ -423,7 +435,8 @@ end
 local function refreshVisibility()
     local frame = ns.Display.frame
     if not frame then return end
-    local show = state.demo ~= nil or (isTauren() and not ask(UnitOnTaxi, "player") and not inCombat())
+    local hideNow = inCombat() and db.hideInCombat ~= false
+    local show = state.demo ~= nil or (isTauren() and not ask(UnitOnTaxi, "player") and not hideNow)
     frame:SetShown(show)
 end
 ns.refreshVisibility = refreshVisibility
@@ -515,8 +528,35 @@ local function describe()
     end
 end
 
+-- The last N stack changes, newest last: what the bar saw, and how each hit compares to halving.
+function ns.printLog(count)
+    local log = db.log
+    if #log == 0 then
+        print("no stack changes recorded yet.")
+        return
+    end
+    local now = GetTime()
+    local first = math.max(1, #log - count + 1)
+    print(string.format("last %d stack changes (of %d):", #log - first + 1, #log))
+    for i = first, #log do
+        local e = log[i]
+        local ago = now - e.t
+        local when = (ago >= 0 and ago < 86400) and string.format("%.0fs ago", ago) or "earlier session"
+        local extra = ""
+        if e.kind == "hit" and e.from then
+            extra = (e.to == math.floor(e.from / 2)) and ", exactly half" or string.format(", half would be %d", math.floor(e.from / 2))
+        elseif e.kind == "decay" and e.sinceStop then
+            extra = string.format(", %.2fs after stopping", e.sinceStop)
+        elseif e.kind == "gain" and e.sinceGain then
+            extra = string.format(", %.2fs after the last gain", e.sinceGain)
+        end
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("  %s: %s -> %s %s%s%s", when, tostring(e.from), tostring(e.to),
+            e.kind or "?", e.moving and " (moving)" or "", extra))
+    end
+end
+
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | count | timer | fade | layout | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -561,6 +601,32 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.minimap = not db.minimap
         ns.Options.UpdateMinimapButton()
         print("minimap button " .. (db.minimap and "shown" or "hidden") .. ".")
+    elseif cmd == "fill" then
+        local list, pick = D.FILLS, nil
+        local want = string.lower(rest or "")
+        for i, f in ipairs(list) do
+            if want ~= "" and string.find(string.lower(f.name), want, 1, true) == 1 then pick = f end
+            if want == "" and f.key == db.fill then pick = list[i % #list + 1] end
+        end
+        pick = pick or list[1]
+        db.fill = pick.key
+        D.ApplyFill()
+        print("bar texture: " .. pick.name .. ".")
+    elseif cmd == "combat" then
+        db.hideInCombat = not db.hideInCombat
+        refreshVisibility()
+        print(db.hideInCombat and "the bar hides in combat." or "the bar stays in combat, frozen at your last count.")
+    elseif cmd == "marker" then
+        db.hitMarker = not db.hitMarker print("hit marker " .. (db.hitMarker and "on" or "off") .. ".")
+    elseif cmd == "tooltip" then
+        db.tooltip = not db.tooltip D.ApplyLock() print("tooltip " .. (db.tooltip and "on" or "off") .. ".")
+    elseif cmd == "dock" then
+        db.dock = not db.dock
+        D.Layout()
+        if db.dock and not PlayerFrame then print("there is no player frame to dock under.")
+        else print(db.dock and "docked under the player frame." or "undocked: back where you put it.") end
+    elseif cmd == "log" then
+        ns.printLog(n or 10)
     elseif cmd == "debug" then
         describe()
     elseif cmd == "" then

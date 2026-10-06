@@ -38,7 +38,15 @@ right-click: lock or unlock the bar, drag: move it round the minimap), or `/plai
 - One bar: the countdown runs inside the stack bar (the next segment fills while you run, your
   top segment drains red when you stop) instead of on a cast bar under it
 - Minimap button
+- Bar texture: any of the profession bars' animated fills (Herbalism, Skinning, Leatherworking,
+  Mining, Blacksmithing, Engineering, Alchemy, Enchanting, Tailoring, Inscription, Jewelcrafting,
+  Cooking, Fishing)
+- Tooltip on hover: stacks, speed, the countdown and the rules
+- A red mark where one hit would leave you (players report a hit halves your stacks)
+- Dock under the player frame
+- Hide in combat (on by default; off keeps the bar up, frozen at your last count)
+- Print recent stack changes (`/plainstride log`), with each hit compared to half
 - Play the demo (40 seconds, any character), reset position and size
 
-Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | count | timer | fade | layout | minimap | demo | reset | debug`.
+Commands: `/plainstride lock | unlock | scale 0.4-2 | idle 0-1 | count | timer | fade | fill [name] | combat | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug`.
 `/pstride` works too.

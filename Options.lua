@@ -10,7 +10,7 @@ ns.Options = O
 
 local TITLE = "Plainstride"
 local ICON = 236717 -- Plainsrunning's own icon (SpellMisc.SpellIconFileDataID)
-local W, H = 600, 420
+local W, H = 600, 470
 
 local content, window, settingsPage, settingsCategory
 local nativeOpenFailed = false
@@ -154,6 +154,10 @@ local function BuildContent()
         function() return db().fadeEmpty end,
         function(v) db().fadeEmpty = v end,
         "Hidden while you stand with no stacks; back as soon as you move. Off: the opacity above.")
+    Check(c, "Hide in combat", L, -382,
+        function() return db().hideInCombat ~= false end,
+        function(v) db().hideInCombat = v if ns.refreshVisibility then ns.refreshVisibility() end end,
+        "The game hides the buff from addons in a fight. Off: the bar stays, frozen at your last count.")
 
     Heading(c, "Other", R, -44)
     Check(c, "Minimap button", R, -66,
@@ -161,19 +165,45 @@ local function BuildContent()
         function(v) db().minimap = v O.UpdateMinimapButton() end,
         "Left-click: options. Right-click: lock or unlock the bar. Drag: move it round the minimap.")
 
-    Button(c, "Play the demo", R + 4, -126, 150, function() SlashCmdList.PLAINSTRIDE("demo") end)
-    local demoTip = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    demoTip:SetPoint("TOPLEFT", R + 6, -154)
-    demoTip:SetWidth(260)
-    demoTip:SetJustifyH("LEFT")
-    demoTip:SetText("About 40 seconds of gains, losses, hits and a full bar, on any character.")
-    Button(c, "Reset position and size", R + 4, -186, 190, function()
+    -- the bar's texture: left-click for the next profession, right-click for the one before
+    local fillCaption = c:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fillCaption:SetPoint("TOPLEFT", R + 6, -116)
+    fillCaption:SetText("Bar texture")
+    local fillButton = TryCreate("Button", nil, c, { "UIPanelButtonTemplate" })
+    fillButton:SetSize(140, 24)
+    fillButton:SetPoint("TOPLEFT", R + 130, -110)
+    fillButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    fillButton:SetScript("OnClick", function(_, button)
+        local list, idx = D.FILLS, 1
+        for i, f in ipairs(list) do if f.key == db().fill then idx = i end end
+        idx = (button == "RightButton") and ((idx - 2) % #list + 1) or (idx % #list + 1)
+        db().fill = list[idx].key
+        D.ApplyFill()
+        Refresh()
+    end)
+    refreshers[#refreshers + 1] = function() fillButton:SetText(D.FillInfo(db().fill).name) end
+
+    Check(c, "Tooltip on hover", R, -144,
+        function() return db().tooltip ~= false end,
+        function(v) db().tooltip = v D.ApplyLock() end)
+    Check(c, "Mark where a hit leaves you", R, -172,
+        function() return db().hitMarker ~= false end,
+        function(v) db().hitMarker = v end,
+        "A red mark at half your stacks: players report a hit halves them.")
+    Check(c, "Dock under the player frame", R, -218,
+        function() return db().dock end,
+        function(v) db().dock = v D.Layout() end,
+        "As wide as your player frame, right under it. Off: where you dragged it.")
+
+    Button(c, "Play the demo", R + 4, -266, 130, function() SlashCmdList.PLAINSTRIDE("demo") end)
+    Button(c, "Reset position", R + 140, -266, 130, function()
         SlashCmdList.PLAINSTRIDE("reset")
         Refresh()
     end)
+    Button(c, "Print recent stack changes", R + 4, -296, 200, function() ns.printLog(15) end)
 
     local status = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    status:SetPoint("TOPLEFT", R + 6, -226)
+    status:SetPoint("TOPLEFT", R + 6, -334)
     status:SetWidth(260)
     status:SetJustifyH("LEFT")
     refreshers[#refreshers + 1] = function()
