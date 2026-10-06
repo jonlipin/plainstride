@@ -8,8 +8,8 @@
 --              events and scripts switched off: the client's own cast bar art, spark and finish /
 --              interrupt effects, driven by our clocks. A plain look-alike stands in if the
 --              template cannot be made.
---   portrait   your character as a 3D model in an action button frame: runs when you run, stands
---              when you stand, flinches when a hit knocks stacks off. Or the Plainsrunning icon.
+--   streaks    wind lines racing through the filled part of the bar while you run, more of them
+--              and faster the more stacks you have (the cast bar's channel wisp glow, stretched thin).
 local ADDON, ns = ...
 
 local D = {}
@@ -19,15 +19,13 @@ local MAX = ns.MAX_STACKS or 30
 local BAR_W, BAR_H = 453, 29          -- ProfessionsRankBarTemplate
 local FILL_W, FILL_H = 441, 18        -- its Fill
 local FILL_X, FILL_Y = 5, -3
-local PORTRAIT_W, PORTRAIT_H = 46, 45 -- UI-HUD-ActionBar-IconFrame
-local GAP = 6
 local TICK_H = 11                     -- the cast bar's natural height
-local TOTAL_W = PORTRAIT_W + GAP + BAR_W
+local TOTAL_W = BAR_W
 local TOTAL_H = 48
 
-local ANIM = { STAND = 0, RUN = 5, WOUND = 9 }
+local STREAKS = 9
 
-local frame, stack, tick, portrait
+local frame, stack, tick
 local view = {
     shown = 0, tweenFrom = 0, tweenTo = 0, tweenStart = 0, tweenDur = 0,
     ghost = nil,
@@ -35,7 +33,6 @@ local view = {
     mode = nil,
     tickArt = nil,
     flowing = nil,
-    modelAnim = nil, woundUntil = nil,
 }
 ns.view = view
 D.view = view
@@ -154,6 +151,20 @@ local function buildStackBar(parent)
     s.Fill:SetPoint("TOPLEFT", s.FillArea, "TOPLEFT", 0, 0)
     if not setAtlas(s.Fill, "skillbar_fill_flipbook_herbalism", false) then
         setAtlas(s.Fill, "Skillbar_Fill_Flipbook_DefaultBlue", false)
+    end
+
+    s.Streaks = {}
+    for i = 1, STREAKS do
+        local t = s.Clip:CreateTexture(nil, "ARTWORK", nil, 3)
+        t:SetBlendMode("ADD")
+        if not setAtlas(t, "Cast_Channel_WispGlow", false) then t:SetColorTexture(1, 1, 1, 0.5) end
+        t:SetVertexColor(0.85, 1, 0.75)
+        t:SetAlpha(0)
+        t.lane = (i - 0.5) / STREAKS          -- spread over the height of the fill
+        t.x = FILL_W * ((i * 0.618) % 1)      -- and along it, so they do not arrive together
+        t.len = 40 + 50 * ((i * 0.37) % 1)
+        t.pace = 0.75 + 0.5 * ((i * 0.53) % 1)
+        s.Streaks[i] = t
     end
 
     s.Flare = s.Clip:CreateTexture(nil, "ARTWORK", nil, 3)
@@ -353,84 +364,6 @@ local function setTickArt(key)
 end
 
 ------------------------------------------------------------------------
--- The portrait: you, in 3D, or the spell icon
-------------------------------------------------------------------------
-local function buildPortrait(parent)
-    local p = CreateFrame("Frame", nil, parent)
-    p:SetSize(PORTRAIT_W, PORTRAIT_H)
-
-    p.Background = p:CreateTexture(nil, "BACKGROUND")
-    if not setAtlas(p.Background, "UI-HUD-ActionBar-IconFrame-Background", false) then
-        p.Background:SetColorTexture(0, 0, 0, 0.85)
-    end
-    p.Background:SetPoint("TOPLEFT", 2, -2)
-    p.Background:SetPoint("BOTTOMRIGHT", -2, 2)
-
-    p.Icon = p:CreateTexture(nil, "ARTWORK")
-    p.Icon:SetPoint("CENTER")
-    p.Icon:SetSize(PORTRAIT_W - 4, PORTRAIT_H - 4)
-    local tex = C_Spell and try(C_Spell.GetSpellTexture, ns.BUFF_ID)
-    p.Icon:SetTexture(tex or "Interface\\Icons\\Spell_Nature_Swiftness")
-    if p.CreateMaskTexture then
-        local m = p:CreateMaskTexture()
-        setAtlas(m, "UI-HUD-ActionBar-IconFrame-Mask", false)
-        local size = (PORTRAIT_W - 4) * 64 / 45
-        m:SetSize(size, size)
-        m:SetPoint("CENTER", p.Icon, "CENTER")
-        p.Icon:AddMaskTexture(m)
-    end
-
-    local ok, model = pcall(CreateFrame, "PlayerModel", nil, p)
-    if ok and model then
-        model:SetPoint("TOPLEFT", 3, -3)
-        model:SetPoint("BOTTOMRIGHT", -3, 3)
-        p.Model = model
-    end
-
-    -- the frame art sits above the model
-    p.Overlay = CreateFrame("Frame", nil, p)
-    p.Overlay:SetAllPoints(p)
-    p.Overlay:SetFrameLevel(p:GetFrameLevel() + 3)
-    p.Border = p.Overlay:CreateTexture(nil, "ARTWORK")
-    setAtlas(p.Border, "UI-HUD-ActionBar-IconFrame", false)
-    p.Border:SetAllPoints(p)
-    p.Flash = p.Overlay:CreateTexture(nil, "OVERLAY")
-    setAtlas(p.Flash, "UI-HUD-ActionBar-IconFrame-Flash", false)
-    p.Flash:SetAllPoints(p)
-    p.Flash:SetBlendMode("ADD")
-    p.Flash:SetAlpha(0)
-    p.FlashAnim = group(p.Flash)
-    alpha(p.FlashAnim, 0, 1, 0.05, 1)
-    alpha(p.FlashAnim, 1, 0, 0.6, 2, nil, "OUT")
-    return p
-end
-
-local function modelAnim(id)
-    local m = portrait and portrait.Model
-    if not m or not m:IsShown() or view.modelAnim == id then return end
-    view.modelAnim = id
-    if m.SetAnimation then pcall(m.SetAnimation, m, id) end
-end
-
-function D.RefreshPortrait()
-    if not portrait then return end
-    local useModel = (db().portrait ~= "icon") and portrait.Model ~= nil
-    if useModel then
-        local m = portrait.Model
-        local ok = pcall(m.SetUnit, m, "player")
-        if ok then
-            pcall(m.SetPortraitZoom, m, 0.35)
-            pcall(m.SetFacing, m, -0.55)
-            view.modelAnim = nil
-        else
-            useModel = false
-        end
-    end
-    if portrait.Model then portrait.Model:SetShown(useModel) end
-    portrait.Icon:SetShown(not useModel)
-end
-
-------------------------------------------------------------------------
 -- Building, layout, lock
 ------------------------------------------------------------------------
 local function savePosition()
@@ -482,12 +415,8 @@ function D.Build()
     end
     translation(D.Shake, 0, 0, 0.1, 1)
 
-    portrait = buildPortrait(content)
-    portrait:SetPoint("LEFT", content, "LEFT", 0, 0)
-    D.portrait = portrait
-
     stack = buildStackBar(content)
-    stack:SetPoint("TOPLEFT", content, "TOPLEFT", PORTRAIT_W + GAP, 0)
+    stack:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
     D.stack = stack
 
     tick = buildTickBar(content)
@@ -510,7 +439,6 @@ function D.Build()
 
     D.Layout()
     D.ApplyLock()
-    D.RefreshPortrait()
     D.Snap(0)
 end
 
@@ -563,12 +491,6 @@ function D.Animate(from, to, kind, now)
         shake(1 + math.min(lost, 10) * 0.25)
         D.Float:SetText("-" .. lost)
         play(D.FloatAnim)
-        play(portrait.FlashAnim)
-        if portrait.Model and portrait.Model:IsShown() then
-            view.modelAnim = nil
-            modelAnim(ANIM.WOUND)
-            view.woundUntil = now + 0.6
-        end
     else
         view.ghost = { from = top, to = to, start = now, hold = 0.1, dur = 0.4, atlas = "ui-castingbar-filling-standard" }
         play(tick.FlashFade)
@@ -625,6 +547,30 @@ function D.Render(now)
         end
     end
 
+    -- wind streaks: only while running, more and faster with more stacks
+    local dt = math.min(0.1, now - (view.lastFrame or now))
+    view.lastFrame = now
+    local power = (state.moving and (state.stacks or 0) > 0) and ((state.stacks or 0) / MAX) or 0
+    view.wind = (view.wind or 0) + (power - (view.wind or 0)) * math.min(1, dt * 3)
+    local wind = view.wind
+    local edge = FILL_W * shown / MAX
+    for i, t in ipairs(stack.Streaks) do
+        local active = wind > 0.02 and i <= math.ceil(STREAKS * (0.3 + 0.7 * wind))
+        if active and edge > 8 then
+            t.x = t.x - dt * (120 + 520 * wind) * t.pace
+            if t.x + t.len < 0 then
+                t.x = edge + 10 * ((i * 0.29) % 1)
+            end
+            if t.x > edge then t.x = edge end
+            t:ClearAllPoints()
+            t:SetPoint("LEFT", stack.FillArea, "BOTTOMLEFT", t.x, 3 + (FILL_H - 6) * t.lane)
+            t:SetSize(t.len * (0.6 + 0.6 * wind), 2 + wind)
+            t:SetAlpha(0.15 + 0.6 * wind)
+        else
+            t:SetAlpha(0)
+        end
+    end
+
     -- the fill flows while you run and rests while you stand
     local flowing = state.moving and (state.stacks or 0) > 0
     if flowing ~= view.flowing then
@@ -670,15 +616,6 @@ function D.Render(now)
             end
         end
         tick.Text:SetText(text)
-    end
-
-    -- the 3D portrait: run, stand, or still flinching from a hit
-    if view.woundUntil and now >= view.woundUntil then
-        view.woundUntil = nil
-        view.modelAnim = nil
-    end
-    if not view.woundUntil then
-        modelAnim(state.moving and ANIM.RUN or ANIM.STAND)
     end
 
     -- quiet when there is nothing to show

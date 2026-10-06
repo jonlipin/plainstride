@@ -40,10 +40,11 @@ local issecret = issecretvalue or function() return false end
 local defaults = {
     locked = true,
     scale = 0.75,
-    portrait = "model",   -- "model" (your character, 3D) or "icon"
     idleAlpha = 0.45,
     showTimer = true,
-    point = { "BOTTOM", "UIParent", "BOTTOM", 0, 190 },
+    minimap = true,
+    minimapAngle = 220,
+    point = { "BOTTOM", "UIParent", "BOTTOM", 0, 260 },
     base = nil,             -- calibrated run speed with no stacks
     gainTicks = {},         -- measured seconds between gains, newest last
     decayTicks = {},
@@ -523,17 +524,22 @@ events:SetScript("OnEvent", function(self, event, arg1)
                 end
             end
         end
+        -- 0.1.0 sat on top of the action bars: move a bar nobody has moved yet
+        local p = db.point
+        if p and p[1] == "BOTTOM" and p[3] == "BOTTOM" and p[4] == 0 and p[5] == 190 then p[5] = 260 end
+        db.portrait = nil
         db.version = VERSION
         ns.db = db
         ns.Display.Build()
         ns.Display.frame:SetScript("OnUpdate", onUpdate)
+        ns.Options.RegisterPage()
+        ns.Options.UpdateMinimapButton()
         self:UnregisterEvent("ADDON_LOADED")
     elseif event == "PLAYER_ENTERING_WORLD" then
         refreshVisibility()
-        ns.Display.RefreshPortrait()
         if isTauren() and not db.hinted then
             db.hinted = true
-            print("Plainsrunning bar is on. /plainstride unlock to move it, /plainstride for options.")
+            print("Plainsrunning bar is on. Options: the minimap button, /plainstride, or Options > AddOns > Plainstride.")
         end
     elseif event == "PLAYER_STARTED_MOVING" then
         state.eventMoving = true
@@ -573,7 +579,7 @@ local function describe()
 end
 
 local function help()
-    print("/plainstride lock | unlock | scale <0.4-2> | idle <0-1> | timer | portrait | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | timer | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -589,10 +595,6 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.locked = false D.ApplyLock() print("unlocked: drag the bar, then /plainstride lock.")
     elseif cmd == "scale" and n then
         db.scale = clamp(n, 0.4, 2) D.Layout() print("scale " .. db.scale .. ".")
-    elseif cmd == "portrait" then
-        db.portrait = (db.portrait == "icon") and "model" or "icon"
-        D.RefreshPortrait()
-        print("left of the bars: " .. (db.portrait == "icon" and "the Plainsrunning icon" or "your character, running when you run") .. ".")
     elseif cmd == "idle" and n then
         db.idleAlpha = clamp(n, 0, 1) print("opacity at 0 stacks: " .. db.idleAlpha .. ".")
     elseif cmd == "timer" then
@@ -610,9 +612,16 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         D.frame:SetPoint(p[1], UIParent, p[3], p[4], p[5])
         D.Layout()
         print("position and size reset.")
+    elseif cmd == "minimap" then
+        db.minimap = not db.minimap
+        ns.Options.UpdateMinimapButton()
+        print("minimap button " .. (db.minimap and "shown" or "hidden") .. ".")
     elseif cmd == "debug" then
         describe()
+    elseif cmd == "" then
+        ns.Options.Toggle()
     else
         help()
     end
+    ns.Options.Refresh()
 end

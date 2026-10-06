@@ -13,7 +13,7 @@ const Module = require('module');
 
 const ROOT = path.join(__dirname, '..');
 const VERBOSE = process.argv.includes('--verbose');
-const ADDON_FILES = ['Plainstride.lua', 'Display.lua'];
+const ADDON_FILES = ['Plainstride.lua', 'Display.lua', 'Options.lua'];
 const isAddonSource = (src) => ADDON_FILES.some(f => src === '@' + f);
 // SHOTWINDOW_LUA=<file> runs the same checks against another copy (a candidate fix, say).
 const ADDON_SRC = ADDON_FILES.map(f => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]);
@@ -177,7 +177,8 @@ T.speedMode = "plain" -- plain / secret / error
 T.falling = false
 T.fallingSecret = false
 T.mounted = false
-T.templates = { CastingBarFrameTemplate = true }
+T.templates = { CastingBarFrameTemplate = true, UICheckButtonTemplate = true, MinimalSliderTemplate = true,
+  UIPanelButtonTemplate = true, ButtonFrameTemplate = true }
 
 local realType = type
 function type(v) if issecretvalue(v) then return secrettype(v) end return realType(v) end
@@ -240,7 +241,8 @@ for m in ([[SetSize SetWidth SetHeight SetPoint ClearAllPoints SetAllPoints SetA
   SetVertexColor UnregisterEvent CreateTexture CreateMaskTexture CreateFontString CreateAnimationGroup
   GetPoint GetFrameLevel IsShown GetScript SetToFinalAlpha SetDuration SetOrder SetStartDelay SetFromAlpha
   SetToAlpha SetSmoothing SetLooping SetFlipBookRows SetFlipBookColumns SetFlipBookFrames SetFlipBookFrameWidth
-  SetFlipBookFrameHeight SetScaleFrom SetScaleTo SetDegrees SetOffset Play Stop IsPlaying SetClipsChildren]]):gmatch("%S+") do KNOWN[m] = true end
+  SetFlipBookFrameHeight SetScaleFrom SetScaleTo SetDegrees SetOffset Play Stop IsPlaying SetClipsChildren SetChecked SetOrientation SetValueStep SetObeyStepOnDrag
+  SetHighlightTexture RegisterForClicks SetToplevel SetParent SetTitle SetPortraitToAsset Raise SetJustifyV]]):gmatch("%S+") do KNOWN[m] = true end
 
 local Widget = {}
 local function widget(kind, parent)
@@ -303,6 +305,46 @@ function Widget:CreateAnimationGroup()
 end
 
 UIParent = widget("Frame", nil)
+function Widget:GetChecked() return self.checked end
+function Widget:SetChecked(v) self.checked = v end
+function Widget:SetParent(p) self.parent = p end
+function Widget:GetParent() return self.parent end
+function Widget:IsVisible()
+  local w = self
+  while w do if not w.shown then return false end w = w.parent end
+  return true
+end
+function Widget:GetWidth() return self.width or 0 end
+function Widget:GetHeight() return self.height or 0 end
+function Widget:SetSize(w, h) self.width, self.height = w, h end
+function Widget:GetCenter() return 500, 500 end
+function Widget:GetEffectiveScale() return 1 end
+function Widget:Click(button)
+  local f = self.scripts.OnClick
+  if f then local ok, err = pcall(f, self, button or "LeftButton") if not ok then T.errors[#T.errors + 1] = "click: " .. tostring(err) end end
+end
+Minimap = widget("Frame", UIParent) Minimap.width = 140
+GameTooltip = widget("Frame", UIParent)
+UISpecialFrames = {}
+function GetCursorPosition() return 600, 500 end
+SettingsPanel = widget("Frame", UIParent) SettingsPanel.shown = false
+T.settings = { opens = 0 }
+Settings = {
+  RegisterCanvasLayoutCategory = function(page, name)
+    T.settings.page, T.settings.name = page, name
+    return { ID = 77, GetID = function(self) return self.ID end }
+  end,
+  RegisterAddOnCategory = function(cat) T.settings.category = cat end,
+  OpenToCategory = function(id)
+    T.settings.opens = T.settings.opens + 1
+    if T.combat then return end -- refused for addon code in combat
+    SettingsPanel.shown = true
+    local page = T.settings.page
+    page.parent = SettingsPanel page.shown = true page.width, page.height = 640, 560
+    if page.scripts.OnShow then page.scripts.OnShow(page) end
+  end,
+}
+function HideUIPanel(f) f.shown = false end
 function CreateFrame(kind, name, parent, template)
   if template and not T.templates[template] then error("unknown template " .. template) end
   local f = widget(kind, parent)
@@ -438,10 +480,9 @@ scenario('loads, builds the Blizzard-art display and shows for a tauren', NS + `
   check(D.tick.scripts.OnUpdate == nil and D.tick.scripts.OnEvent == nil, "Blizzard's cast bar loop is off")
   check(D.stack.Fill.atlas == "skillbar_fill_flipbook_herbalism", "herbalism fill: " .. tostring(D.stack.Fill.atlas))
   check(D.stack.Border.atlas == "Professions-skillbar-frame", "profession frame")
-  check(D.portrait.Model and D.portrait.Model.unit == "player", "3D model of the player")
   T.step(1)
   check(#T.errors == 0, "no errors")
-  check(T.printed("unlock"), "first-login hint")
+  check(T.printed("Options"), "first-login hint")
 `);
 
 scenario('hidden for other races', NS + `
@@ -521,7 +562,7 @@ scenario('the beat: the second loss lands one beat after the first, and the bar 
   check(#ns.db.decayTicks == 1, "a decay tick measured")
 `);
 
-scenario('a hit while moving: red ghost, shake, floating loss, glow, the model flinches', NS + `
+scenario('a hit while moving: red ghost, shake, floating loss, glow', NS + `
   T.login()
   T.aura = 20 T.speed = 8.4
   T.step(2)
@@ -533,9 +574,6 @@ scenario('a hit while moving: red ghost, shake, floating loss, glow, the model f
   check(D.Shake.plays == 1, "shake")
   check(D.Float.text == "-7", "floating -7: " .. tostring(D.Float.text))
   check(D.stack.HitGlowAnim.plays == 1 and D.tick.InterruptGlowAnim.plays == 1, "interrupt glows")
-  check(D.portrait.Model.anim == 9, "wound animation: " .. tostring(D.portrait.Model.anim))
-  T.step(0.7)
-  check(D.portrait.Model.anim == 5, "back to running: " .. tostring(D.portrait.Model.anim))
 `);
 
 scenario('in combat the count comes from the run speed, hits included', NS + `
@@ -636,12 +674,52 @@ scenario('without the cast bar template a look-alike is built', NS + `
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
-scenario('no model: the icon stands in', NS + `
-  T.modelFails = true
+scenario('wind streaks race through the fill while running, more with more stacks', NS + `
   T.login()
-  check(not D.portrait.Model.shown and D.portrait.Icon.shown, "icon shown")
-  T.slash("portrait")
-  check(ns.db.portrait == "icon", "portrait option")
+  T.aura = 3 T.speed = 7.2
+  T.step(2)
+  local function lit() local n = 0 for _, t in ipairs(D.stack.Streaks) do if t.alpha > 0 then n = n + 1 end end return n end
+  local few = lit()
+  check(few >= 1, "some streaks at 3 stacks: " .. few)
+  T.aura = 30 T.step(3)
+  check(lit() > few, "more streaks at 30: " .. lit())
+  for _, t in ipairs(D.stack.Streaks) do
+    if t.alpha > 0 then check(t.x <= 441 + 0.01, "a streak stays inside the fill") end
+  end
+  T.speed = 0 T.step(3)
+  check(lit() == 0, "none while standing: " .. lit())
+`);
+
+scenario('options page in Options > AddOns, the window in combat, and the minimap button', NS + `
+  T.login()
+  check(T.settings.name == "Plainstride" and T.settings.category, "canvas page registered")
+  local mm = _G.PlainstrideMinimapButton
+  check(mm and mm.shown, "minimap button")
+  mm:Click("LeftButton")
+  check(SettingsPanel.shown and T.settings.page:IsVisible(), "left-click opens Options > AddOns > Plainstride")
+  mm:Click("LeftButton")
+  check(not SettingsPanel.shown, "a second click closes it")
+  T.combat = true
+  mm:Click("LeftButton")
+  check(_G.PlainstrideOptions and _G.PlainstrideOptions.shown, "in combat the window opens instead")
+  mm:Click("LeftButton")
+  check(not _G.PlainstrideOptions.shown, "and closes")
+  T.combat = false
+  mm:Click("LeftButton")
+  check(SettingsPanel.shown, "out of combat the page is used again")
+  local locked = ns.db.locked
+  mm:Click("RightButton")
+  check(ns.db.locked ~= locked, "right-click toggles the lock")
+  T.slash("minimap")
+  check(not mm.shown and not ns.db.minimap, "/plainstride minimap hides it")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('an unmoved 0.1.0 bar moves up off the action bars', NS + `
+  PlainstrideDB = { point = { "BOTTOM", "UIParent", "BOTTOM", 0, 190 }, portrait = "model" }
+  T.login()
+  check(ns.db.point[5] == 260, "moved up: " .. tostring(ns.db.point[5]))
+  check(ns.db.portrait == nil, "old portrait setting dropped")
 `);
 
 scenario('the demo plays through and ends', NS + `
@@ -661,7 +739,7 @@ scenario('the demo plays through and ends', NS + `
 
 scenario('slash commands', NS + `
   T.login()
-  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "portrait", "portrait", "reset", "debug" }) do
+  for _, c in ipairs({ "", "unlock", "lock", "scale 1.2", "scale 9", "idle 0.3", "timer", "timer", "minimap", "minimap", "help", "reset", "debug" }) do
     T.slash(c)
   end
   check(ns.db.scale == 0.75, "reset scale")

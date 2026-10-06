@@ -4,10 +4,11 @@
 ## Author: jonlipin
 ## Version: 0.1.0
 ## SavedVariables: PlainstrideDB
-## IconTexture: Interface\Icons\Spell_Nature_Swiftness
+## IconTexture: 236717
 ## X-Category: Combat
 ## X-Website: https://github.com/jonlipin/plainstride
 ## X-License: MIT
 
 Plainstride.lua
 Display.lua
+Options.lua
