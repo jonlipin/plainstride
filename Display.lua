@@ -134,37 +134,45 @@ local function buildStackBar(parent)
     setAtlas(s.Background, "Professions-skillbar-bg", true)
     s.Background:SetPoint("TOPLEFT")
 
-    s.Fill = s:CreateTexture(nil, "ARTWORK", nil, 2)
+    -- Where the fill sits. The fill itself always keeps its full size so the flipbook never
+    -- stretches; a clipping frame as wide as the stacks shows only that much of it. (Blizzard uses
+    -- a mask with CLAMPTOBLACKADDITIVE wrapping, which Lua cannot set reliably: without it the mask
+    -- let the whole bar through.)
+    s.FillArea = CreateFrame("Frame", nil, s)
+    s.FillArea:SetSize(FILL_W, FILL_H)
+    s.FillArea:SetPoint("TOPLEFT", FILL_X, FILL_Y)
+
+    s.Clip = CreateFrame("Frame", nil, s)
+    s.Clip:SetPoint("TOPLEFT", s.FillArea, "TOPLEFT", 0, 0)
+    s.Clip:SetPoint("BOTTOMLEFT", s.FillArea, "BOTTOMLEFT", 0, 0)
+    s.Clip:SetWidth(0.01)
+    s.Clip:SetClipsChildren(true)
+    s.Clip:SetFrameLevel(s:GetFrameLevel() + 1)
+
+    s.Fill = s.Clip:CreateTexture(nil, "ARTWORK", nil, 2)
     s.Fill:SetSize(FILL_W, FILL_H)
-    s.Fill:SetPoint("TOPLEFT", FILL_X, FILL_Y)
+    s.Fill:SetPoint("TOPLEFT", s.FillArea, "TOPLEFT", 0, 0)
     if not setAtlas(s.Fill, "skillbar_fill_flipbook_herbalism", false) then
         setAtlas(s.Fill, "Skillbar_Fill_Flipbook_DefaultBlue", false)
     end
 
-    s.Flare = s:CreateTexture(nil, "ARTWORK", nil, 2)
+    s.Flare = s.Clip:CreateTexture(nil, "ARTWORK", nil, 3)
     s.Flare:SetSize(53, 16)
     s.Flare:SetBlendMode("ADD")
     setAtlas(s.Flare, "skillbar_flare_herbalism", false)
+    s.Flare:SetPoint("RIGHT", s.Clip, "RIGHT", 0, 0)
     s.Flare:SetAlpha(0)
 
-    -- Blizzard sizes a mask instead of the fill, so the flipbook never stretches
-    if s.CreateMaskTexture then
-        s.Mask = s:CreateMaskTexture(nil, "ARTWORK", nil, 2)
-        setAtlas(s.Mask, "Professions-skillbar-mask", true)
-        if s.Mask.SetTextureWrap then pcall(s.Mask.SetTextureWrap, s.Mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE") end
-        s.Mask:SetPoint("LEFT", s.Fill, "LEFT", 1, 0)
-        s.Fill:AddMaskTexture(s.Mask)
-        s.Flare:AddMaskTexture(s.Mask)
-        s.Flare:SetPoint("RIGHT", s.Mask, "RIGHT", 0, 0)
-    else
-        s.Flare:SetPoint("RIGHT", s.Fill, "LEFT", 0, 0)
-    end
+    -- above the fill: the lost chunk, the stack marks and the frame art
+    s.Over = CreateFrame("Frame", nil, s)
+    s.Over:SetAllPoints(s)
+    s.Over:SetFrameLevel(s:GetFrameLevel() + 2)
 
     -- what was just lost, lingering on top of the empty part of the bar
-    s.Ghost = s:CreateTexture(nil, "ARTWORK", nil, 3)
+    s.Ghost = s.Over:CreateTexture(nil, "ARTWORK", nil, 3)
     s.Ghost:SetHeight(FILL_H - 2)
     s.Ghost:Hide()
-    s.GhostFlash = s:CreateTexture(nil, "ARTWORK", nil, 4)
+    s.GhostFlash = s.Over:CreateTexture(nil, "ARTWORK", nil, 4)
     s.GhostFlash:SetBlendMode("ADD")
     setAtlas(s.GhostFlash, "ui-castingbar-full-glow-standard", false)
     s.GhostFlash:SetPoint("TOPLEFT", s.Ghost, "TOPLEFT", -2, 2)
@@ -175,7 +183,7 @@ local function buildStackBar(parent)
     s.Dividers = {}
     for i = 1, MAX - 1 do
         local major = i % 5 == 0
-        local t = s:CreateTexture(nil, "ARTWORK", nil, 5)
+        local t = s.Over:CreateTexture(nil, "ARTWORK", nil, 5)
         if major then
             setAtlas(t, "UI-HUD-ExperienceBar-Frame-Pip", false)
             t:SetSize(6, FILL_H + 4)
@@ -184,11 +192,11 @@ local function buildStackBar(parent)
             t:SetSize(2, FILL_H - 6)
             t:SetAlpha(0.7)
         end
-        t:SetPoint("CENTER", s.Fill, "LEFT", FILL_W * i / MAX, 0)
+        t:SetPoint("CENTER", s.FillArea, "LEFT", FILL_W * i / MAX, 0)
         s.Dividers[i] = t
     end
 
-    s.Border = s:CreateTexture(nil, "ARTWORK", nil, 6)
+    s.Border = s.Over:CreateTexture(nil, "ARTWORK", nil, 6)
     setAtlas(s.Border, "Professions-skillbar-frame", true)
     s.Border:SetPoint("TOPLEFT")
 
@@ -196,29 +204,29 @@ local function buildStackBar(parent)
     s.HitGlow = s:CreateTexture(nil, "BACKGROUND")
     s.HitGlow:SetBlendMode("ADD")
     setAtlas(s.HitGlow, "cast_interrupt_outerglow", false)
-    s.HitGlow:SetPoint("TOPLEFT", s.Fill, "TOPLEFT", -22, 18)
-    s.HitGlow:SetPoint("BOTTOMRIGHT", s.Fill, "BOTTOMRIGHT", 22, -18)
+    s.HitGlow:SetPoint("TOPLEFT", s.FillArea, "TOPLEFT", -22, 18)
+    s.HitGlow:SetPoint("BOTTOMRIGHT", s.FillArea, "BOTTOMRIGHT", 22, -18)
     s.HitGlow:SetAlpha(0)
 
     -- full: the bonus objective bar's starburst and sheen
-    s.Starburst = s:CreateTexture(nil, "OVERLAY", nil, 1)
+    s.Starburst = s.Over:CreateTexture(nil, "OVERLAY", nil, 1)
     s.Starburst:SetBlendMode("ADD")
     setAtlas(s.Starburst, "bonusobjectives-bar-starburst", false)
     s.Starburst:SetSize(54, 54)
-    s.Starburst:SetPoint("CENTER", s.Fill, "RIGHT", 0, 0)
+    s.Starburst:SetPoint("CENTER", s.FillArea, "RIGHT", 0, 0)
     s.Starburst:SetAlpha(0)
-    s.Sheen = s:CreateTexture(nil, "OVERLAY")
+    s.Sheen = s.Over:CreateTexture(nil, "OVERLAY")
     s.Sheen:SetBlendMode("ADD")
     setAtlas(s.Sheen, "bonusobjectives-bar-sheen", false)
     s.Sheen:SetSize(97, FILL_H + 4)
-    s.Sheen:SetPoint("LEFT", s.Fill, "LEFT", -60, 0)
+    s.Sheen:SetPoint("LEFT", s.FillArea, "LEFT", -60, 0)
     s.Sheen:SetAlpha(0)
 
     local textHolder = CreateFrame("Frame", nil, s)
-    textHolder:SetAllPoints(s.Fill)
+    textHolder:SetAllPoints(s.FillArea)
     textHolder:SetFrameLevel(s:GetFrameLevel() + 5)
     s.Text = newFont(textHolder, "OVERLAY", "Number12FontOutline", "GameFontHighlightOutline", "GameFontHighlight")
-    s.Text:SetPoint("CENTER", s.Fill, "CENTER", 0, 0)
+    s.Text:SetPoint("CENTER", s.FillArea, "CENTER", 0, 0)
     s.Text:SetJustifyH("CENTER")
 
     -- animations
@@ -492,7 +500,7 @@ function D.Build()
     floatHolder:SetFrameLevel(content:GetFrameLevel() + 10)
     D.Float = newFont(floatHolder, "OVERLAY", "CombatTextFont", "GameFontNormalHuge", "GameFontNormalLarge")
     D.Float:SetTextColor(1, 0.12, 0.08)
-    D.Float:SetPoint("BOTTOM", stack.Fill, "TOP", 0, 2)
+    D.Float:SetPoint("BOTTOM", stack.FillArea, "TOP", 0, 2)
     D.Float:SetAlpha(0)
     D.FloatAnim = group(D.Float)
     alpha(D.FloatAnim, 0, 1, 0.08, 1)
@@ -588,11 +596,7 @@ function D.Render(now)
     local p = shown / MAX
     if p > 0 then
         stack.Fill:Show()
-        if stack.Mask then
-            stack.Mask:SetWidth(math.max(0.01, BAR_W * p))
-        else
-            stack.Fill:SetWidth(math.max(0.01, FILL_W * p))
-        end
+        stack.Clip:SetWidth(math.max(0.01, FILL_W * p))
     else
         stack.Fill:Hide()
         stack.Flare:SetAlpha(0)
@@ -611,7 +615,7 @@ function D.Render(now)
             local w = FILL_W * (top - shown) / MAX
             if w > 0.5 then
                 stack.Ghost:ClearAllPoints()
-                stack.Ghost:SetPoint("LEFT", stack.Fill, "LEFT", FILL_W * shown / MAX, 0)
+                stack.Ghost:SetPoint("LEFT", stack.FillArea, "LEFT", FILL_W * shown / MAX, 0)
                 stack.Ghost:SetWidth(w)
                 stack.Ghost:SetAlpha(1 - 0.5 * drain)
                 stack.Ghost:Show()

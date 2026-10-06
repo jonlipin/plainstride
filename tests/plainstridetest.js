@@ -240,7 +240,7 @@ for m in ([[SetSize SetWidth SetHeight SetPoint ClearAllPoints SetAllPoints SetA
   SetVertexColor UnregisterEvent CreateTexture CreateMaskTexture CreateFontString CreateAnimationGroup
   GetPoint GetFrameLevel IsShown GetScript SetToFinalAlpha SetDuration SetOrder SetStartDelay SetFromAlpha
   SetToAlpha SetSmoothing SetLooping SetFlipBookRows SetFlipBookColumns SetFlipBookFrames SetFlipBookFrameWidth
-  SetFlipBookFrameHeight SetScaleFrom SetScaleTo SetDegrees SetOffset Play Stop IsPlaying]]):gmatch("%S+") do KNOWN[m] = true end
+  SetFlipBookFrameHeight SetScaleFrom SetScaleTo SetDegrees SetOffset Play Stop IsPlaying SetClipsChildren]]):gmatch("%S+") do KNOWN[m] = true end
 
 local Widget = {}
 local function widget(kind, parent)
@@ -469,6 +469,7 @@ scenario('out of combat: the aura gives the count; moving fills toward the next 
   check(D.tick.ChannelFinish.plays >= 1, "cast bar channel finish on a gain")
   T.step(0.6)
   check(math.abs(v.shown - 4) < 0.01, "segments eased to 4: " .. v.shown)
+  check(math.abs(D.stack.Clip.width - 441 * 4 / 30) < 0.01, "only 4 stacks of the fill show: " .. tostring(D.stack.Clip.width))
   check(D.stack.Text.text:find("4 / 30"), "text: " .. tostring(D.stack.Text.text))
 `);
 
