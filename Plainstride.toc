@@ -2,7 +2,8 @@
 ## Title: Plainstride
 ## Notes: Tauren Plainsrunning as a bar: stacks on a profession-style bar, the next stack (or the next loss) on a cast bar, animated gains, losses and hits.
 ## Author: jonlipin
-## Version: 0.1.0
+## Version: 0.2.0
+## OptionalDeps: EllesmereUI
 ## SavedVariables: PlainstrideDB
 ## IconTexture: 236717
 ## X-Category: Combat
@@ -12,3 +13,5 @@
 Plainstride.lua
 Display.lua
 Options.lua
+Styles.lua
+Plainstride_Skins.lua

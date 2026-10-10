@@ -26,12 +26,14 @@ local FILL_X, FILL_Y = 5, -3
 local TICK_H = 11                     -- the cast bar's natural height
 local TOTAL_W = BAR_W
 local TWO_BAR_H = 48                  -- the stack bar, a gap, and the cast bar under it
+local THREE_BAR_H = 63                -- and the loss bar under that (its room is kept while it is hidden)
+local GAIN_Y, LOSS_Y = -33, -48       -- where the gain and the loss bars sit under the stack bar's top
 
 local STREAKS = 9
 
 -- The profession bars' animated fills (Skillbar_Fill_Flipbook_<kit> plus its flare). Each flipbook
 -- is two columns of 34 px frames; the row count comes from the atlas height when the client says,
--- else from this table (atlas sizes in build 1.60.1.70235). tint colours the wind streaks.
+-- else from this table (atlas sizes in build 1.60.1.70235). tint colors the wind streaks.
 local FILLS = {
     { key = "herbalism", name = "Herbalism", rows = 30, tint = { 0.85, 1, 0.75 } },
     { key = "skinning", name = "Skinning", rows = 30, tint = { 0.75, 1, 0.95 } },
@@ -49,7 +51,7 @@ local FILLS = {
 }
 D.FILLS = FILLS
 
-local frame, stack, tick
+local frame, stack, tick, loss
 local view = {
     shown = 0, tweenFrom = 0, tweenTo = 0, tweenStart = 0, tweenDur = 0,
     ghost = nil,
@@ -399,19 +401,93 @@ local TICK_ART = {
     idle = { fill = "ui-castingbar-filling-standard", glow = "ui-castingbar-full-glow-standard" },
 }
 
-local function setTickArt(key)
-    if view.tickArt == key then return end
-    view.tickArt = key
-    local art = TICK_ART[key]
-    tick:SetStatusBarTexture(art.fill)
-    if tick.Flash then setAtlas(tick.Flash, art.glow, false) end
-    for _, fx in ipairs({ "StandardGlow", "ChannelShadow", "CraftGlow" }) do
-        if tick[fx] then tick[fx]:SetShown(fx == art.sparkFx) end
+-- Flat bars (db.flatBar): one plain color per state instead of the art, in any window style.
+local FLAT = "Interface\\Buttons\\WHITE8X8"
+local FLAT_TICK = {
+    gain = { 0.3, 0.78, 0.22 }, max = { 0.3, 0.78, 0.22 },
+    decay = { 1, 0.7, 0 }, idle = { 1, 0.7, 0 },
+    urgent = { 0.85, 0.12, 0.06 },
+}
+local FLAT_GHOST = {
+    ["ui-castingbar-interrupted"] = { 0.85, 0.12, 0.06 },
+    ["ui-castingbar-filling-standard"] = { 1, 0.7, 0 },
+}
+local function flat() return db().flatBar == true end
+-- The stack fill's flat color: the window style's accent, else the green of "Next stack".
+local function flatColor()
+    local S = ns.Styles and ns.Styles.S
+    if S and S.GetAccentColor then
+        local ok, r, g, b = pcall(S.GetAccentColor)
+        if ok and type(r) == "number" then return r, g, b end
     end
+    return 0.56, 0.86, 0.4
+end
+
+-- The gain bar (tick) and the loss bar each keep their own art and flat color.
+local function setBarArt(bar, key)
+    if bar.psArt == key then return end
+    bar.psArt = key
+    local art = TICK_ART[key]
+    if flat() then
+        bar:SetStatusBarTexture(FLAT) -- its color is blended every frame (see flatBarColor)
+    else
+        bar:SetStatusBarTexture(art.fill)
+        if bar.SetStatusBarColor then bar:SetStatusBarColor(1, 1, 1) end
+    end
+    if bar.Flash then setAtlas(bar.Flash, art.glow, false) end
+    for _, fx in ipairs({ "StandardGlow", "ChannelShadow", "CraftGlow" }) do
+        if bar[fx] then bar[fx]:SetShown(fx == art.sparkFx) end
+    end
+end
+
+-- The flat cast bar's color: green while gaining, gold while draining, turning to red over the
+-- last URGENT_SPAN seconds before the loss. Render eases the bar toward it, so a change of
+-- state (setting off, stopping) blends too instead of jumping.
+local URGENT_SPAN = 0.7
+local flatTarget = { 0, 0, 0 }
+local function flatTickTarget(mode, left)
+    local c = FLAT_TICK.idle
+    if mode == "gain" or mode == "hold" or mode == "max" then
+        c = FLAT_TICK.gain
+    elseif mode == "decay" then
+        local u = left and clamp(1 - left / URGENT_SPAN, 0, 1) or 0
+        local g, r = FLAT_TICK.decay, FLAT_TICK.urgent
+        for i = 1, 3 do flatTarget[i] = g[i] + (r[i] - g[i]) * u end
+        return flatTarget
+    end
+    for i = 1, 3 do flatTarget[i] = c[i] end
+    return flatTarget
+end
+
+local function flatBarColor(bar, mode, left, dt)
+    local target = flatTickTarget(mode, left)
+    local c = bar.psColor
+    if not c then
+        c = { target[1], target[2], target[3] }
+        bar.psColor = c
+    end
+    local k = math.min(1, dt * 8) -- settles in about a quarter of a second
+    for i = 1, 3 do c[i] = c[i] + (target[i] - c[i]) * k end
+    if bar.SetStatusBarColor then bar:SetStatusBarColor(c[1], c[2], c[3]) end
 end
 
 local function oneBar()
     return db().layout == "one"
+end
+
+-- The one-bar layout's coming loss: a red overlay on your top stack (the cast bar's interrupted
+-- fill, or flat red).
+local function setLossSegArt()
+    local kind = flat() and "flat" or "art"
+    if view.lossSegArt == kind then return end
+    view.lossSegArt = kind
+    if kind == "flat" then
+        stack.LossSeg:SetColorTexture(1, 1, 1, 1)
+        stack.LossSeg:SetVertexColor(FLAT_TICK.urgent[1], FLAT_TICK.urgent[2], FLAT_TICK.urgent[3])
+    else
+        setAtlas(stack.LossSeg, "ui-castingbar-interrupted", false)
+        stack.LossSeg:SetVertexColor(1, 1, 1)
+    end
 end
 
 -- The tick segment's look: a green glow while earning, the cast bar's red fill while losing.
@@ -419,7 +495,11 @@ local function setSegArt(kind)
     if view.segArt == kind then return end
     view.segArt = kind
     local seg = stack.Seg
-    if kind == "decay" then
+    if kind == "decay" and flat() then
+        seg:SetColorTexture(1, 1, 1, 1)
+        seg:SetBlendMode("BLEND")
+        seg:SetVertexColor(FLAT_TICK.urgent[1], FLAT_TICK.urgent[2], FLAT_TICK.urgent[3])
+    elseif kind == "decay" then
         setAtlas(seg, "ui-castingbar-interrupted", false)
         seg:SetBlendMode("BLEND")
         seg:SetVertexColor(1, 1, 1)
@@ -446,6 +526,7 @@ function D.ApplyBackground()
     local a = clamp(db().bgAlpha or 1, 0, 1)
     stack.Background:SetAlpha(a)
     if tick and tick.Background then tick.Background:SetAlpha(a) end
+    if loss and loss.Background then loss.Background:SetAlpha(a) end
 end
 
 function D.ApplyFill()
@@ -470,6 +551,22 @@ function D.ApplyFill()
     stack.FlipBook:SetFlipBookFrames(rows * 2)
     view.flowing = nil -- Render starts the flipbook again if you are running
     for _, t in ipairs(stack.Streaks) do t:SetVertexColor(info.tint[1], info.tint[2], info.tint[3]) end
+    -- Flat: a plain fill in one color. The flipbook has nothing to turn then, so it rests; the
+    -- rest moves as before (gains easing in, the flare, wind streaks, ghost, sheen at 30).
+    if flat() then
+        stack.Fill:SetTexture(FLAT)
+        stack.Fill:SetVertexColor(flatColor())
+        stack.Flare:SetVertexColor(flatColor())
+        for _, t in ipairs(stack.Streaks) do t:SetVertexColor(1, 1, 1) end
+    else
+        stack.Fill:SetVertexColor(1, 1, 1)
+        stack.Flare:SetVertexColor(1, 1, 1)
+    end
+    -- the cast bars and the segments pick their art again
+    for _, bar in ipairs({ tick, loss }) do
+        if bar then bar.psArt, bar.psColor = nil, nil end
+    end
+    view.segArt, view.lossSegArt = nil, nil
 end
 
 ------------------------------------------------------------------------
@@ -478,25 +575,29 @@ end
 local function fillTooltip()
     local st = ns.state
     local stacks = st.stacks or 0
-    local mode, _, left = ns.clocks(GetTime(), st.stacks)
-    if ns.inCombat() then mode = "combat" end
+    local g, l = ns.gainLoss(GetTime(), st.stacks)
     GameTooltip:ClearLines()
     GameTooltip:AddDoubleLine("Plainsrunning", string.format("%d / %d stacks (+%d%% speed)", stacks, MAX, stacks), 1, 0.82, 0, 1, 1, 1)
-    if mode == "gain" and left then
-        GameTooltip:AddLine(string.format("Next stack in %.1f s", left), 0.56, 0.94, 0.48)
-    elseif mode == "decay" and left then
-        GameTooltip:AddLine(string.format("Losing a stack in %.1f s", left), 1, 0.35, 0.23)
-    elseif mode == "max" then
-        GameTooltip:AddLine("Full speed", 1, 0.82, 0)
-    elseif mode == "combat" then
+    if ns.inCombat() then
         GameTooltip:AddLine("In combat: the count is from before the fight", 0.7, 0.7, 0.7, true)
+    else
+        if g.mode == "gain" and g.left then
+            GameTooltip:AddLine(string.format("Next stack in %s%.1f s of moving (%d of 5 checks passed)", g.est and "about " or "", g.left, g.done or 0), 0.56, 0.94, 0.48)
+        elseif g.mode == "max" then
+            GameTooltip:AddLine("Full speed", 1, 0.82, 0)
+        end
+        if l and l.left then
+            GameTooltip:AddLine(string.format("Losing a stack in %s%.1f s%s", l.est and "about " or "", l.left,
+                l.certain and " (a check caught you standing)" or " if you keep standing"), 1, 0.35, 0.23)
+        end
     end
     if stacks >= 2 then
         GameTooltip:AddLine(string.format("A hit would leave you about %d", math.floor(stacks / 2)), 1, 0.35, 0.23)
     end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("+1% speed for every 5 seconds of moving, up to +30%.", 0.8, 0.8, 0.8, true)
-    GameTooltip:AddLine("Standing still: about a second's grace, then 1 stack a second.", 0.8, 0.8, 0.8, true)
+    GameTooltip:AddLine("The game checks just after each 1 second tick: standing then costs a stack on the next tick, even if you step in between. Standing still: 1 stack a second.", 0.8, 0.8, 0.8, true)
+    GameTooltip:AddLine("Each second in which you moved at all counts toward the next stack; five give one. A loss starts the count again.", 0.8, 0.8, 0.8, true)
     GameTooltip:AddLine("A hit halves your stacks (as players report it). Stacks still build in combat if nothing hits you.", 0.8, 0.8, 0.8, true)
     GameTooltip:Show()
 end
@@ -522,8 +623,16 @@ local function savePosition()
     if p then db().point = { p, "UIParent", rp, x, y } end
 end
 
+-- The player frame to dock under: EllesmereUI's (EllesmereUIUnitFrames) while it is shown,
+-- otherwise the game's own.
+function D.DockTarget()
+    local eui = _G.EllesmereUIUnitFrames_Player
+    if type(eui) == "table" and eui.IsShown and eui:IsShown() then return eui end
+    return PlayerFrame
+end
+
 local function docked()
-    return db().dock and PlayerFrame ~= nil
+    return db().dock and D.DockTarget() ~= nil
 end
 
 -- Locked (or docked): clicks go through the bar; with the tooltip on, the mouse still hovers it.
@@ -542,14 +651,16 @@ end
 function D.ApplyPosition()
     if not frame then return end
     frame:ClearAllPoints()
-    if docked() then
-        local pw = PlayerFrame:GetWidth() or 0
-        local ps = PlayerFrame:GetEffectiveScale() or 1
+    view.dockedTo = docked() and D.DockTarget() or nil
+    if view.dockedTo then
+        local target = view.dockedTo
+        local pw = target:GetWidth() or 0
+        local ps = target:GetEffectiveScale() or 1
         local us = UIParent:GetEffectiveScale() or 1
         local scale = 0.75
         if pw > 0 and us > 0 then scale = clamp(pw * ps * 0.92 / (TOTAL_W * us), 0.3, 2) end
         frame:SetScale(scale)
-        frame:SetPoint("TOP", PlayerFrame, "BOTTOM", 0, 2)
+        frame:SetPoint("TOP", target, "BOTTOM", 0, 2)
     else
         frame:SetScale(clamp(db().scale or 0.75, 0.4, 2))
         local p = db().point or ns.defaults.point
@@ -562,13 +673,16 @@ function D.Layout()
     D.ApplyPosition()
     D.ApplyLock()
     local one = oneBar()
-    frame:SetSize(TOTAL_W, one and BAR_H or TWO_BAR_H)
+    local lossOn = not one and db().lossBar ~= false
+    frame:SetSize(TOTAL_W, one and BAR_H or (lossOn and THREE_BAR_H or TWO_BAR_H))
     tick:SetShown(not one)
+    loss:SetShown(lossOn)
     if one then
         if tick.Flash then tick.Flash:SetAlpha(0) end
     else
         stack.Seg:Hide()
         stack.Spark:Hide()
+        stack.LossSeg:Hide()
         stack.Timer:SetText("")
     end
 end
@@ -613,9 +727,32 @@ function D.Build()
     setSegArt("gain")
     D.ApplyFill()
 
+    -- the gain bar: progress to the next stack, in five parts, one per check passed
     tick = buildTickBar(content)
-    tick:SetPoint("TOPLEFT", stack, "TOPLEFT", FILL_X, -33)
+    tick:SetPoint("TOPLEFT", stack, "TOPLEFT", FILL_X, GAIN_Y)
     D.tick = tick
+    local marks = CreateFrame("Frame", nil, tick)
+    marks:SetAllPoints(tick)
+    marks:SetFrameLevel(tick:GetFrameLevel() + 2)
+    tick.psMarks = {}
+    for i = 1, 4 do
+        local m = marks:CreateTexture(nil, "OVERLAY")
+        if not setAtlas(m, "UI-HUD-ExperienceBar-Divider", false) then m:SetColorTexture(0, 0, 0, 0.6) end
+        m:SetSize(2, TICK_H)
+        m:SetPoint("CENTER", tick, "LEFT", FILL_W * i / 5, 0)
+        tick.psMarks[i] = m
+    end
+
+    -- the loss bar: only while a loss is coming; its room is kept, so nothing jumps
+    loss = buildTickBar(content)
+    loss:SetPoint("TOPLEFT", stack, "TOPLEFT", FILL_X, LOSS_Y)
+    loss:SetAlpha(0)
+    D.loss = loss
+    view.lossAlpha = 0
+
+    stack.LossSeg = stack.Over:CreateTexture(nil, "ARTWORK", nil, 3)
+    stack.LossSeg:SetHeight(FILL_H - 2)
+    stack.LossSeg:Hide()
 
     -- floating loss on a hit, Blizzard combat text style
     local floatHolder = CreateFrame("Frame", nil, content)
@@ -705,6 +842,10 @@ function D.Animate(from, to, kind, now)
         play(tick.FlashFade)
     end
     setAtlas(stack.Ghost, view.ghost.atlas, false)
+    if flat() then
+        local c = FLAT_GHOST[view.ghost.atlas] or FLAT_TICK.urgent
+        stack.Ghost:SetColorTexture(c[1], c[2], c[3], 1)
+    end
 end
 
 ------------------------------------------------------------------------
@@ -714,6 +855,11 @@ function D.Render(now)
     if not frame then return end
     local state = ns.state
     local cfg = db()
+    -- Docked: EllesmereUI's player frame can show (or go) after the bar was placed.
+    if cfg.dock and D.DockTarget() ~= view.dockedTo then
+        D.ApplyPosition()
+        D.ApplyLock()
+    end
 
     -- the stack value
     if view.tweenDur > 0 then
@@ -723,36 +869,42 @@ function D.Render(now)
     end
     local shown = clamp(view.shown, 0, MAX)
 
-    -- the tick, in the bar itself
+    -- the two clocks: the gain (always) and the loss (only while one is coming)
     local stacks = state.stacks
-    local mode, frac, left = ns.clocks(now, stacks)
-    if ns.inCombat() and not state.demo then
-        mode, frac, left = "combat", 0, nil -- the count is frozen: no countdown to show
+    local g, l = ns.gainLoss(now, stacks)
+    local combat = ns.inCombat() and not state.demo
+    if combat then l = nil end -- the count is frozen: no countdown to show
+    view.mode = combat and "combat" or (l and "decay" or g.mode)
+    view.loss = l
+    local function ease(key, v)
+        local old = view[key] or 0
+        if math.abs(v - old) > 0.5 then view[key] = v else view[key] = old + (v - old) * 0.5 end
+        return clamp(view[key], 0, 1)
     end
-    view.mode = mode
-    if math.abs(frac - view.barFrac) > 0.5 then view.barFrac = frac
-    else view.barFrac = view.barFrac + (frac - view.barFrac) * 0.5 end
-    local bf = clamp(view.barFrac, 0, 1)
+    local gb = ease("gainFrac", combat and 0 or (g.frac or 0))
+    local lb = l and ease("lossFrac", l.frac or 0) or clamp(view.lossFrac or 0, 0, 1)
     local one = oneBar()
     local segLo, segHi, fillTo = nil, nil, shown
-    if not one then
-        -- two bars: the stack bar shows whole stacks, the cast bar below shows the tick
-    elseif mode == "gain" and shown < MAX and view.tweenDur == 0 then
-        segLo, segHi = shown, math.min(MAX, shown + bf)
-        fillTo = segHi
-    elseif mode == "decay" and shown >= 1 then
-        segLo, segHi = shown - 1, shown - 1 + bf
+    if one and not combat and g.mode == "gain" and shown < MAX and view.tweenDur == 0 then
+        segLo, segHi = shown, math.min(MAX, shown + gb)
         fillTo = segHi
     end
     view.fillTo = fillTo
+    -- one bar: a coming loss is a red overlay on your top stack, draining toward the tick
+    if one and l and shown >= 1 then
+        setLossSegArt()
+        stack.LossSeg:ClearAllPoints()
+        stack.LossSeg:SetPoint("LEFT", stack.FillArea, "LEFT", FILL_W * (shown - 1) / MAX, 0)
+        stack.LossSeg:SetWidth(math.max(0.5, FILL_W * lb / MAX))
+        stack.LossSeg:SetAlpha(0.85)
+        stack.LossSeg:Show()
+    else
+        stack.LossSeg:Hide()
+    end
     if segLo and segHi - segLo > 0.01 then
-        setSegArt(mode)
-        if mode == "decay" then
-            stack.Seg:SetAlpha(0.85)
-        else
-            local pulse = math.sin(now * 6)
-            stack.Seg:SetAlpha(0.35 + 0.25 * pulse * pulse)
-        end
+        setSegArt("gain")
+        local pulse = math.sin(now * 6)
+        stack.Seg:SetAlpha(0.35 + 0.25 * pulse * pulse)
         stack.Seg:ClearAllPoints()
         stack.Seg:SetPoint("LEFT", stack.FillArea, "LEFT", FILL_W * segLo / MAX, 0)
         stack.Seg:SetWidth(math.max(0.5, FILL_W * (segHi - segLo) / MAX))
@@ -776,15 +928,15 @@ function D.Render(now)
     end
 
     -- the ghost of what was lost
-    local g = view.ghost
-    if g then
-        local t = now - g.start
-        if t >= g.hold + g.dur then
+    local gh = view.ghost
+    if gh then
+        local t = now - gh.start
+        if t >= gh.hold + gh.dur then
             view.ghost = nil
             stack.Ghost:Hide()
         else
-            local drain = t <= g.hold and 0 or easeOut((t - g.hold) / g.dur)
-            local top = g.from + (g.to - g.from) * drain
+            local drain = t <= gh.hold and 0 or easeOut((t - gh.hold) / gh.dur)
+            local top = gh.from + (gh.to - gh.from) * drain
             local w = FILL_W * (top - shown) / MAX
             if w > 0.5 then
                 stack.Ghost:ClearAllPoints()
@@ -837,7 +989,7 @@ function D.Render(now)
     local flowing = state.moving and (stacks or 0) > 0
     if flowing ~= view.flowing then
         view.flowing = flowing
-        if flowing then stack.FillAnim:Play() else stack.FillAnim:Stop() end
+        if flowing and not flat() then stack.FillAnim:Play() else stack.FillAnim:Stop() end
     end
 
     -- where one hit would leave you
@@ -862,49 +1014,74 @@ function D.Render(now)
     else
         stack.Text:SetText("Plainsrunning")
     end
+    -- "~": the tick has not been seen yet, or that clock's last prediction did not come true
+    local gEst, lEst = g.est and "~" or "", (l and l.est) and "~" or ""
     local text = ""
     if one and cfg.showTimer then
-        if mode == "combat" then
+        if combat then
             text = "|cffaaaaaaIn combat|r"
-        elseif mode == "max" then
-            text = "|cffffd100MAX|r"
-        elseif mode == "gain" then
-            text = (left and left > 0) and string.format("|cff8ff07a+1|r %.1f", left) or "|cff8ff07a+1|r"
-        elseif mode == "decay" then
-            text = (left and left > 0) and string.format("|cffff5a3a-1|r %.1f", left) or "|cffff5a3a-1|r"
+        else
+            if g.mode == "max" then
+                text = "|cffffd100MAX|r"
+            elseif g.mode == "gain" then
+                text = (g.left and g.left > 0) and string.format("|cff8ff07a+1|r %s%.1f", gEst, g.left) or "|cff8ff07a+1|r"
+            end
+            if l then
+                local lt = (l.left and l.left > 0) and string.format("|cffff5a3a-1|r %s%.1f", lEst, l.left) or "|cffff5a3a-1|r"
+                text = (text ~= "" and (text .. "   ") or "") .. lt
+            end
         end
     end
     stack.Timer:SetText(text)
 
-    -- the cast bar (two bars)
+    -- two bars: the gain bar, and the loss bar under it while a loss is coming
     if not one then
-        local art = mode
-        if mode == "decay" and left and left < 0.35 then art = "urgent" end
-        if mode == "hold" then art = "gain" end
-        setTickArt(TICK_ART[art] and art or "idle")
-        tick:SetValue(bf)
-        local sparkOn = (mode == "gain" or mode == "decay") and bf > 0.01 and bf < 0.99
+        local gArt = combat and "idle" or (g.mode == "max" and "max" or (g.mode == "gain" and "gain" or "idle"))
+        setBarArt(tick, gArt)
+        if flat() then flatBarColor(tick, gArt == "idle" and "idle" or "gain", nil, dt) end
+        tick:SetValue(gb)
         if tick.Spark then
             tick.Spark:ClearAllPoints()
-            tick.Spark:SetPoint("CENTER", tick, "LEFT", FILL_W * bf, 0)
-            tick.Spark:SetShown(sparkOn)
+            tick.Spark:SetPoint("CENTER", tick, "LEFT", FILL_W * gb, 0)
+            tick.Spark:SetShown(not combat and g.mode == "gain" and gb > 0.01 and gb < 0.99)
         end
         if tick.Text then
             local t = ""
             if cfg.showTimer then
-                if mode == "combat" then
+                if combat then
                     t = "In combat"
-                elseif mode == "max" then
+                elseif g.mode == "max" then
                     t = "Full speed"
-                elseif mode == "gain" then
-                    t = (left and left > 0) and string.format("Next stack  %.1f", left) or "Next stack"
-                elseif mode == "decay" then
-                    t = (left and left > 0) and string.format("Losing a stack  %.1f", left) or "Losing a stack"
+                elseif g.mode == "gain" then
+                    t = (g.left and g.left > 0) and string.format("Next stack  %s%.1f", gEst, g.left) or "Next stack"
                 elseif state.source == "demo" then
                     t = "Demo"
                 end
             end
             tick.Text:SetText(t)
+        end
+        if cfg.lossBar ~= false then
+            -- fades in quickly, out a little slower; its room stays, so the bars never jump
+            local want = l and 1 or 0
+            local a = view.lossAlpha or 0
+            if want > a then a = math.min(want, a + dt / 0.12) else a = math.max(want, a - dt / 0.3) end
+            view.lossAlpha = a
+            loss:SetAlpha(a)
+            if l then
+                -- gold while you stand (a check would catch you), red once one has, or in the last moment
+                local lArt = (l.certain or (l.left or 1) < 0.35) and "urgent" or "decay"
+                setBarArt(loss, lArt)
+                if flat() then flatBarColor(loss, "decay", l.left, dt) end
+                loss:SetValue(lb)
+                if loss.Spark then
+                    loss.Spark:ClearAllPoints()
+                    loss.Spark:SetPoint("CENTER", loss, "LEFT", FILL_W * lb, 0)
+                    loss.Spark:SetShown(lb > 0.01 and lb < 0.99)
+                end
+                if loss.Text then
+                    loss.Text:SetText(cfg.showTimer and ((l.left and l.left > 0) and string.format("Losing a stack  %s%.1f", lEst, l.left) or "Losing a stack") or "")
+                end
+            end
         end
     end
 

@@ -1,4 +1,4 @@
-// Offline checks for Plainstride: loads Plainstride.lua and Display.lua into fengari (Lua 5.3)
+// Offline checks for Plainstride: loads every file in the TOC into fengari (Lua 5.3)
 // against a stubbed WoW Forever client and drives logins, movement, aura and run-speed readings,
 // combat, hits, the demo and every slash command. Secret values are trapped the way the client
 // does it: tainted code may not compare, do arithmetic on, index or truth-test (booleans) them.
@@ -13,7 +13,7 @@ const Module = require('module');
 
 const ROOT = path.join(__dirname, '..');
 const VERBOSE = process.argv.includes('--verbose');
-const ADDON_FILES = ['Plainstride.lua', 'Display.lua', 'Options.lua'];
+const ADDON_FILES = ['Plainstride.lua', 'Display.lua', 'Options.lua', 'Styles.lua', 'Plainstride_Skins.lua'];
 const isAddonSource = (src) => ADDON_FILES.some(f => src === '@' + f);
 // SHOTWINDOW_LUA=<file> runs the same checks against another copy (a candidate fix, say).
 const ADDON_SRC = ADDON_FILES.map(f => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]);
@@ -230,6 +230,9 @@ DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) T.prints[#T.prints + 1] = m e
 SlashCmdList = {}
 CombatTextFont = { font = "CombatTextFont" }
 GameFontNormalHuge = { font = "GameFontNormalHuge" }
+GameFontHighlight = { font = "GameFontHighlight" }
+GameFontNormal = { font = "GameFontNormal" }
+GameFontDisable = { font = "GameFontDisable" }
 
 -- Widgets: every method the addon calls is recorded; the ones whose answer matters are real.
 local KNOWN = {}
@@ -248,8 +251,9 @@ for m in ([[SetSize SetWidth SetHeight SetPoint ClearAllPoints SetAllPoints SetA
 local Widget = {}
 local function widget(kind, parent)
   local w = setmetatable({ kind = kind, parent = parent, shown = true, alpha = 1, scripts = {}, calls = {},
-    points = {}, level = (parent and rawget(parent, "level") or 0) + 1, events = {} }, Widget)
+    points = {}, level = (parent and rawget(parent, "level") or 0) + 1, events = {}, kids = {} }, Widget)
   T.frames[#T.frames + 1] = w
+  if parent then table.insert(rawget(parent, "kids"), w) end
   return w
 end
 Widget.__index = function(self, k)
@@ -272,7 +276,10 @@ function Widget:RegisterEvent(e) self.events[e] = true end
 function Widget:UnregisterEvent(e) self.events[e] = nil end
 function Widget:UnregisterAllEvents() self.events = {} end
 function Widget:SetText(t) self.text = t end
-function Widget:SetAtlas(a, use) self.atlas = a return true end
+function Widget:SetAtlas(a, use) self.atlas = a self.texture = nil return true end
+function Widget:SetTexture(t) self.texture = t end
+function Widget:SetVertexColor(r, g, b) self.vertex = { r, g, b } end
+function Widget:SetStatusBarColor(r, g, b) self.barColor = { r, g, b } end
 function Widget:SetStatusBarTexture(t) self.barTexture = t end
 function Widget:SetValue(v) self.value = v end
 function Widget:SetWidth(w) self.width = w end
@@ -306,6 +313,18 @@ function Widget:CreateAnimationGroup()
 end
 
 UIParent = widget("Frame", nil)
+-- what Styles.lua asks of a frame: its regions and children, and a few setters it records
+local REGION = { Texture = true, FontString = true, MaskTexture = true }
+function Widget:GetRegions() local out = {} for _, k in ipairs(self.kids) do if k.kind == "Texture" or k.kind == "FontString" then out[#out + 1] = k end end return table.unpack(out) end
+function Widget:GetChildren() local out = {} for _, k in ipairs(self.kids) do if not REGION[k.kind] and not k.kind:find("^Animation") then out[#out + 1] = k end end return table.unpack(out) end
+function Widget:IsObjectType(t) return self.kind == t end
+function Widget:HookScript(n, f) local old = self.scripts[n] self.scripts[n] = function(...) if old then old(...) end f(...) end end
+function Widget:SetEnabled(v) self.enabled = not not v end
+function Widget:IsEnabled() return self.enabled ~= false end
+function Widget:SetColorTexture(r, g, b, a) self.color = { r, g, b, a } end
+function Widget:SetTexCoord(...) self.texcoord = { ... } end
+function Widget:SetRotation(r) self.rotation = r end
+function Widget:GetNumMaskTextures() return 0 end
 function Widget:GetChecked() return self.checked end
 function Widget:SetChecked(v) self.checked = v end
 function Widget:SetParent(p) self.parent = p end
@@ -345,7 +364,8 @@ Settings = {
     if page.scripts.OnShow then page.scripts.OnShow(page) end
   end,
 }
-function HideUIPanel(f) f.shown = false end
+-- In combat the game refuses HideUIPanel from an addon
+function HideUIPanel(f) if T.combat then T.hideRefused = (T.hideRefused or 0) + 1 return end f.shown = false end
 PlayerFrame = widget("Frame", UIParent) PlayerFrame.width = 232
 T.isPlayerMoving = nil
 function IsPlayerMoving() return T.isPlayerMoving end
@@ -361,6 +381,11 @@ function CreateFrame(kind, name, parent, template)
   if template and not T.templates[template] then error("unknown template " .. template) end
   local f = widget(kind, parent)
   if name then _G[name] = f end
+  if template == "ButtonFrameTemplate" then
+    -- its X, as UIPanelCloseButton wires it: HideUIPanel on the parent
+    f.CloseButton = widget("Button", f)
+    f.CloseButton.scripts.OnClick = function() HideUIPanel(f) end
+  end
   if template == "CastingBarFrameTemplate" then
     for _, k in ipairs({ "TextBorder", "Icon", "BorderShield", "DropShadow", "CastTimeText", "Spark", "Flash",
         "StandardGlow", "ChannelShadow", "CraftGlow", "Background", "Border", "BorderMask", "EnergyMask" }) do
@@ -457,10 +482,11 @@ function loadAddon(S) {
 }
 
 let failed = 0, passed = 0, checks = 0;
-function scenario(name, body) {
+function scenario(name, body, pre) {
   HITS = new Map(); SEEN = new Map();
   const S = newState();
-  const loadErr = loadAddon(S);
+  const preErr = pre ? exec(S, pre, '=pre') : null;
+  const loadErr = preErr ? 'pre: ' + preErr : loadAddon(S);
   let lines = [];
   if (loadErr) lines.push('E\tloading: ' + loadErr);
   else {
@@ -557,10 +583,11 @@ scenario('standing still: the tick bar drains toward the next loss and a loss is
   check(not st.moving, "stopped after the grace")
   local mode, frac, left = ns.clocks(T.now, st.stacks)
   check(mode == "decay", "decay mode")
-  check(D.tick.barTexture == "ui-castingbar-filling-standard", "standard fill while draining: " .. tostring(D.tick.barTexture))
+  check(D.loss.barTexture == "ui-castingbar-filling-standard" and D.loss.alpha > 0, "the loss bar shows, gold while you stand: " .. tostring(D.loss.barTexture))
+  check(D.tick.barTexture == "ui-castingbar-filling-channel", "the gain bar stays the gain bar: " .. tostring(D.tick.barTexture))
   check(not D.stack.FillAnim.playing, "the fill rests while standing")
   T.step(0.9)
-  check(D.tick.barTexture == "ui-castingbar-interrupted", "red in the last moment: " .. tostring(D.tick.barTexture))
+  check(D.loss.barTexture == "ui-castingbar-interrupted", "red once a check has caught you: " .. tostring(D.loss.barTexture))
   T.aura = 9
   T.step(0.1)
   check(st.stacks == 9, "9")
@@ -656,12 +683,13 @@ scenario('one-bar layout: the next segment fills while running, the top one drai
   check(D.stack.Timer.text:find("+1"), "countdown in the bar: " .. tostring(D.stack.Timer.text))
   T.speed = 0
   T.step(0.8)
-  check(D.stack.Seg.atlas == "ui-castingbar-interrupted", "red segment while standing: " .. tostring(D.stack.Seg.atlas))
-  local w2 = D.stack.Clip.width
-  check(w2 < 441 * 7 / 30 and w2 > 441 * 6 / 30, "the 7th segment is draining: " .. w2)
+  check(D.stack.LossSeg.shown and D.stack.LossSeg.atlas == "ui-castingbar-interrupted", "the coming loss: red over the top stack: " .. tostring(D.stack.LossSeg.atlas))
+  local w2 = D.stack.LossSeg.width
+  check(w2 and w2 > 0 and w2 <= 441 / 30 + 0.01, "it drains within the top stack: " .. tostring(w2))
+  check(D.stack.Clip.width >= 441 * 7 / 30 - 0.01, "the stacks themselves stay full until the loss lands")
   check(D.stack.Timer.text:find("-1"), "loss countdown: " .. tostring(D.stack.Timer.text))
   T.slash("layout")
-  check(ns.db.layout == "two" and D.tick.shown and not D.stack.Seg.shown, "back to two bars")
+  check(ns.db.layout == "two" and D.tick.shown and not D.stack.Seg.shown and not D.stack.LossSeg.shown, "back to two bars")
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 
@@ -833,6 +861,7 @@ scenario('wind streaks race through the fill while running, more with more stack
 scenario('options page in Options > AddOns, the window in combat, and the minimap button', NS + `
   T.login()
   check(T.settings.name == "Plainstride" and T.settings.category, "canvas page registered")
+  check(not T.settings.page.shown, "the page waits hidden, so the panel showing it runs OnShow on the first visit too")
   local mm = _G.PlainstrideMinimapButton
   check(mm and mm.shown, "minimap button")
   mm:Click("LeftButton")
@@ -842,6 +871,10 @@ scenario('options page in Options > AddOns, the window in combat, and the minima
   T.combat = true
   mm:Click("LeftButton")
   check(_G.PlainstrideOptions and _G.PlainstrideOptions.shown, "in combat the window opens instead")
+  _G.PlainstrideOptions.CloseButton:Click()
+  check(not _G.PlainstrideOptions.shown and not T.hideRefused, "its X closes it in combat, without HideUIPanel")
+  mm:Click("LeftButton")
+  check(_G.PlainstrideOptions.shown, "and it opens again")
   mm:Click("LeftButton")
   check(not _G.PlainstrideOptions.shown, "and closes")
   T.combat = false
@@ -900,6 +933,492 @@ scenario('slash commands', NS + `
   check(D.stack.Text.text:find("Plainsrunning"), "count text on")
   check(ns.db.locked, "locked")
   check(T.printed("aura:"), "debug printed")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+// ---------------------------------------------------------------------------------------------
+// Window styles (Styles.lua + Plainstride_Skins.lua)
+const STYLE = NS + `
+  function T.find(pat) for _, w in ipairs(T.frames) do if type(w.text) == "string" and w.text:find(pat) then return w end end end
+  function T.opacity() for _, w in ipairs(T.frames) do if w.kind == "Slider" and w.caption and w.caption.text == "Dark background opacity" then return w end end end
+  function T.skinErrors() local n = 0 for k in pairs(ns.report) do if k:find("skin error") then n = n + 1 T.errors[#T.errors + 1] = k .. ": " .. tostring(ns.report[k]) end end return n end
+  function T.count(w, kind) local n = 0 for _, k in ipairs(w.kids) do if k.kind == kind then n = n + 1 end end return n end
+`;
+
+scenario('window styles: Blizzard draws nothing; the Look options; Dark drawn at once from there', STYLE + `
+  T.login()
+  check(ns.db.style == "auto" and ns.db.darkAlpha == 0.92, "defaults auto and 0.92")
+  check(ns.Styles.S == nil, "no drawing calls in use")
+  check(ns.report.skin == "Blizzard (EllesmereUI is not loaded)", "status: " .. tostring(ns.report.skin))
+  check(D.stack.Border.alpha == 1 and D.stack.Background.atlas == "Professions-skillbar-bg" and D.stack.Background.color == nil, "the profession bar as it was")
+  check(D.tick.Border.alpha == 1 and D.stack.psEdge == nil, "the cast bar as it was, no edge")
+  _G.PlainstrideMinimapButton:Click("LeftButton")
+  local btn, slider = T.find("^Window style"), T.opacity()
+  check(btn and btn.text == "Window style: Automatic", "Look: the style button: " .. tostring(btn and btn.text))
+  check(T.find("^In use: Blizzard %(EllesmereUI is not loaded%)%.") ~= nil, "Look: the note line")
+  check(slider and slider.enabled == false and slider.holder.alpha == 0.5 and slider.caption.font == GameFontDisable, "opacity slider grayed while Automatic")
+  btn:Click("LeftButton")
+  check(ns.db.style == "blizzard" and btn.text == "Window style: Blizzard", "left-click: Blizzard")
+  btn:Click("LeftButton")
+  check(ns.db.style == "dark" and ns.Styles.S == ns.Styles.Dark and ns.report.skin == "Dark", "left-click: Dark, drawn at once: " .. tostring(ns.report.skin))
+  check(D.stack.Border.alpha == 0 and D.stack.psEdge ~= nil, "the bar flattened at once")
+  check(not (_G.PlainstrideReloadPrompt and _G.PlainstrideReloadPrompt.shown), "no reload prompt from Blizzard to Dark")
+  check(slider.enabled == true and slider.holder.alpha == 1, "opacity slider live for Dark")
+  check(T.count(btn, "Texture") == 0, "page controls untouched")
+  btn:Click("RightButton")
+  check(ns.db.style == "blizzard" and _G.PlainstrideReloadPrompt and _G.PlainstrideReloadPrompt.shown, "reload prompt leaving Dark")
+  check(slider.enabled == false and slider.holder.alpha == 0.5, "opacity slider grayed again")
+  check(T.skinErrors() == 0 and #T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('window styles: Dark flattens the bar, keeps what moves, and draws the combat window', STYLE + `
+  PlainstrideDB = { style = "dark" }
+  T.login()
+  check(ns.report.skin == "Dark", "status: " .. tostring(ns.report.skin))
+  local s = D.stack
+  check(s.Border.alpha == 0, "the profession frame faded")
+  check(s.Background.color and s.Background.color[4] == 0.85, "a dark track")
+  check(#s.Background.points == 0 and s.Background.calls.SetAllPoints == 1, "the track covers just the band")
+  check(s.psEdge and T.count(s.psEdge, "Texture") == 4, "a 1px edge round the band (4 lines)")
+  local e = s.psEdge.points[1]
+  check(e and e[2] == s.FillArea and e[4] == -1 and e[5] == 1, "the edge sits one unit outside the band")
+  check(s.Dividers[5].color and s.Dividers[5].color[4] == 0.9 and s.Dividers[1].color[4] == 0.5, "stack marks: dark lines, darker every fifth")
+  check(D.tick.Border.alpha == 0 and D.tick.Background.color ~= nil and D.tick.psEdge ~= nil, "the cast bar: frame faded, track, edge")
+  check(D.loss.Border.alpha == 0 and D.loss.Background.color ~= nil and D.loss.psEdge ~= nil, "the loss bar flattened too")
+  check(D.tick.psMarks[1].color and D.tick.psMarks[1].color[1] == 0, "the gain bar's part marks: thin dark lines")
+  T.slash("background 0.3")
+  check(math.abs(s.Background.alpha - 0.3) < 0.001 and math.abs(D.tick.Background.alpha - 0.3) < 0.001, "the Background opacity option still works")
+  T.slash("background 1")
+  -- what moves is untouched
+  check(s.Fill.atlas == "skillbar_fill_flipbook_herbalism" and s.HitMark.alpha == 0.85, "the fill and the hit marker keep their art")
+  T.aura = 6 T.speed = 7.42 T.step(1)
+  check(s.FillAnim.playing and D.tick.barTexture == "ui-castingbar-filling-channel", "fill flows, cast bar fill as before")
+  T.aura = 3 T.step(0.1)
+  check(D.Shake.plays == 1 and v.ghost ~= nil, "a hit still shakes and leaves a ghost")
+  -- the options window, used in combat
+  T.combat = true
+  _G.PlainstrideMinimapButton:Click("LeftButton")
+  local win = _G.PlainstrideOptions
+  check(win and win.shown, "the window opens in combat")
+  win.scripts.OnShow(win) -- the stub does not run OnShow by itself
+  check(T.count(win, "Texture") >= 11, "window drew backdrop, title strip, rule and edges: " .. T.count(win, "Texture"))
+  local close = win.CloseButton or win.psClose
+  check(close and T.count(close, "Texture") == 2, "the close X drawn")
+  local top = 0
+  for _, k in ipairs({ win:GetChildren() }) do if k ~= close then top = math.max(top, k.level) end end
+  check(close.level > top, "the close button above everything in the window")
+  local btn, slider = T.find("^Window style"), T.opacity()
+  check(btn and T.count(btn, "Texture") == 0, "the controls inside stay as they are")
+  check(slider.enabled == true and slider.holder.alpha == 1, "opacity slider live")
+  local backdrop
+  for _, k in ipairs(win.kids) do if k.color and k.color[4] == 0.92 then backdrop = k end end
+  check(backdrop ~= nil, "the backdrop at the saved opacity")
+  slider.scripts.OnValueChanged(slider, 61)
+  check(ns.db.darkAlpha == 0.6 and backdrop.color[4] == 0.6, "the slider sets 60% in steps of 5, live: " .. tostring(ns.db.darkAlpha))
+  btn:Click("LeftButton")
+  local prompt = _G.PlainstrideReloadPrompt
+  check(ns.db.style == "auto" and prompt and prompt.shown, "reload prompt leaving Dark")
+  check(ns.report.skin:find("Blizzard after a /reload", 1, true), "status says a reload is due: " .. ns.report.skin)
+  check(slider.enabled == false and slider.holder.alpha == 0.5, "opacity slider grayed for Automatic")
+  check(T.count(prompt, "Texture") >= 11, "the prompt drawn in Dark too")
+  RELOADED = false C_UI = { Reload = function() RELOADED = true end }
+  prompt.reload:Click()
+  check(RELOADED, "Reload now reloads")
+  btn:Click("RightButton")
+  check(ns.db.style == "dark" and not prompt.shown and ns.report.skin == "Dark", "back to Dark: prompt gone")
+  T.combat = false
+  T.prints = {}
+  T.slash("style blizzard")
+  check(ns.db.style == "blizzard" and T.printed("window style: Blizzard"), "/plainstride style blizzard")
+  T.slash("style auto")
+  check(ns.db.style == "auto", "/plainstride style auto")
+  T.slash("style purple")
+  check(ns.db.style == "auto" and T.printed("styles: auto, blizzard, dark"), "a wrong word is refused")
+  T.slash("debug")
+  check(T.printed("skin: "), "debug shows the skin line")
+  check(T.skinErrors() == 0 and #T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('window styles: EllesmereUI (a stand-in that records each call)', STYLE + `
+  T.fire("ADDON_LOADED", "Plainstride")
+  EUI_FN(EUI_S) -- EllesmereUI calls back at login
+  T.fire("PLAYER_ENTERING_WORLD")
+  local function did(w, what) return w ~= nil and (EUIDONE[w] or ""):find(what, 1, true) ~= nil end
+  check(EUI_REG == "Plainstride", "registered under the folder name: " .. tostring(EUI_REG))
+  check(ns.report.skin == "EllesmereUI (eui style)", "status: " .. tostring(ns.report.skin))
+  check(D.stack.Fill.vertex and D.stack.Fill.vertex[1] == 0.2 and D.stack.Fill.vertex[3] == 0.9, "saved flat bars take EllesmereUI's accent once it is drawn")
+  check(did(D.stack.psEdge, "Panel") and did(D.tick.psEdge, "Panel") and did(D.loss.psEdge, "Panel"), "edges drawn by EllesmereUI, on all three bars")
+  check(did(D.stack.Text, "Font") and did(D.stack.Timer, "Font") and did(D.tick.Text, "Font"), "bar text in EllesmereUI's font")
+  check(D.stack.Border.alpha == 0 and D.stack.Background.color[1] == 0.1, "track in EllesmereUI's panel color")
+  EUI_COLOR = { 0.3, 0.2, 0.1 }
+  for _, fn in ipairs(EUI_LOOKS) do fn() end
+  check(D.stack.Background.color[1] == 0.3 and D.tick.Background.color[1] == 0.3, "the track follows a live color change")
+  T.combat = true
+  _G.PlainstrideMinimapButton:Click("LeftButton")
+  local win = _G.PlainstrideOptions
+  win.scripts.OnShow(win)
+  check(did(win, "Shell") and did(win.CloseButton or win.psClose, "CloseButton"), "window shelled, close button")
+  local border
+  for _, k in ipairs({ win:GetChildren() }) do if k.euiBorder then border = k end end
+  check(border and (win.CloseButton or win.psClose).level > border.level, "close button above EllesmereUI's border frame")
+  check(T.find("^Window style") and not did(T.find("^Window style"), "Button"), "the controls inside stay as they are")
+  check(T.skinErrors() == 0 and #T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`, `
+  EUIDONE = {} EUI_LOOKS = {} EUI_COLOR = { 0.1, 0.1, 0.1 }
+  PlainstrideDB = { flatBar = true }
+  local function rec(n) return function(f) if f then EUIDONE[f] = (EUIDONE[f] or "") .. n .. "," end return true end end
+  EUI_S = { GetStyle = function() return "eui" end, GetPanelColor = function() return EUI_COLOR[1], EUI_COLOR[2], EUI_COLOR[3], 0.9 end,
+    OnLooksChanged = function(fn) EUI_LOOKS[#EUI_LOOKS + 1] = fn end, GetAccentColor = function() return 0.2, 0.4, 0.9 end }
+  for _, n in ipairs({ "Panel", "Inset", "FadeRegions", "Button", "WhiteButtonLabel", "CloseButton", "SquareIcon", "Font" }) do EUI_S[n] = rec(n) end
+  EUI_S.Shell = function(f) rec("Shell")(f) local b = CreateFrame("Frame", nil, f) b:SetFrameLevel(f:GetFrameLevel() + 6) b.euiBorder = true end
+  EllesmereUI = { RegisterSkin = function(name, fn) EUI_REG = name EUI_FN = fn end, _DispatchSkinRegistration = function() end }
+`);
+
+
+scenario('dock under EllesmereUI\'s player frame while it is shown, the game\'s otherwise', STYLE + `
+  T.login()
+  local eui = CreateFrame("Button", "EllesmereUIUnitFrames_Player", UIParent)
+  eui:SetSize(260, 60)
+  T.prints = {}
+  T.slash("dock")
+  local p = D.frame.points[1]
+  check(p and p[2] == eui and p[1] == "TOP", "docked under EllesmereUI's player frame: " .. tostring(p and p[2] == PlayerFrame and "PlayerFrame" or p and p[2]))
+  check(T.printed("docked under EllesmereUI's player frame"), "and says so")
+  eui:Hide() T.step(0.05)
+  p = D.frame.points[1]
+  check(p and p[2] == PlayerFrame, "its frame hidden: back under the game's player frame")
+  eui:Show() T.step(0.05)
+  p = D.frame.points[1]
+  check(p and p[2] == eui, "shown again: under it again")
+  T.slash("dock")
+  p = D.frame.points[1]
+  check(p and p[2] == UIParent and p[5] == 260, "undocked: back at its own spot")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('an EllesmereUI player frame made after login is found', STYLE + `
+  T.login()
+  T.slash("dock")
+  check(D.frame.points[1][2] == PlayerFrame, "at first under the game's frame")
+  local eui = CreateFrame("Button", "EllesmereUIUnitFrames_Player", UIParent)
+  eui:SetSize(260, 60)
+  T.step(0.05)
+  check(D.frame.points[1][2] == eui, "moved under EllesmereUI's frame once it is there")
+`);
+
+scenario('flat bars: plain colors in any style, everything still moves', STYLE + `
+  T.login()
+  local FLAT = "Interface\\\\Buttons\\\\WHITE8X8"
+  check(ns.db.flatBar == false, "off by default")
+  check(D.stack.Fill.texture == nil and D.stack.Fill.atlas == "skillbar_fill_flipbook_herbalism", "the profession art by default")
+  T.slash("flat")
+  local s = D.stack
+  check(ns.db.flatBar and s.Fill.texture == FLAT, "a flat fill")
+  check(s.Fill.vertex and math.abs(s.Fill.vertex[1] - 0.56) < 0.001, "in the green of Next stack (no window style drawn)")
+  T.aura = 5 T.speed = 7.35 T.step(0.5)
+  check(D.tick.barTexture == FLAT and D.tick.barColor and D.tick.barColor[2] == 0.78, "the cast bar flat green while gaining")
+  check(not s.FillAnim.playing, "the flipbook rests: nothing to turn on a flat fill")
+  T.aura = 6 T.step(0.1)
+  check(s.FlareFadeOut.plays >= 1 and D.tick.ChannelFinish.plays >= 1, "a gain still flares and finishes the cast bar")
+  T.step(0.6)
+  check(math.abs(s.Clip.width - 441 * 6 / 30) < 0.01, "the fill eases to 6 stacks: " .. tostring(s.Clip.width))
+  T.step(1.5)
+  local lit = 0 for _, t in ipairs(s.Streaks) do if t.alpha > 0 then lit = lit + 1 end end
+  check(lit >= 1, "wind streaks still race through it: " .. lit)
+  -- Standing still: the loss bar comes up gold, turns red, blended frame by frame; the gain bar stays green.
+  local seen, gainGreen = {}, true
+  T.speed = 0
+  for i = 1, 100 do
+    T.step(0.02)
+    local _, l = ns.gainLoss(T.now, st.stacks)
+    local c = D.loss.barColor
+    if l and c then seen[#seen + 1] = { c[1], c[2], c[3], left = l.left } end
+    local gcol = D.tick.barColor
+    if not (gcol and gcol[2] == 0.78) then gainGreen = false end
+  end
+  local function near(c, r, g) return math.abs(c[1] - r) < 0.05 and math.abs(c[2] - g) < 0.05 end
+  local goldAt, redAt, goldToRed
+  for i, c in ipairs(seen) do
+    if not goldAt and near(c, 1, 0.7) then goldAt = i end
+    if goldAt and not redAt and near(c, 0.85, 0.12) then redAt = i end
+    -- between gold (1, 0.7) and red (0.85, 0.12): green part strictly between
+    if goldAt and not redAt and c[2] > 0.2 and c[2] < 0.6 then goldToRed = true end
+  end
+  check(goldAt ~= nil, "gold while you stand")
+  check(redAt ~= nil, "red in the last moment")
+  check(goldToRed, "gold blends into red over the last stretch")
+  check(gainGreen, "the gain bar stays flat green meanwhile")
+  local mid
+  for _, c in ipairs(seen) do if c.left and c.left > 0.4 and c.left < 0.5 then mid = c end end
+  local want = mid and (0.7 + (0.12 - 0.7) * (1 - mid.left / 0.7))
+  check(mid and math.abs(mid[2] - want) < 0.15, "half way through the last stretch the bar is half way to red: " .. tostring(mid and mid[2]) .. " vs " .. tostring(want))
+  local biggest = 0
+  for i = 2, #seen do
+    local d = math.abs(seen[i][1] - seen[i - 1][1]) + math.abs(seen[i][2] - seen[i - 1][2])
+    if d > biggest then biggest = d end
+  end
+  check(biggest < 0.2, "no jump between two frames: " .. biggest)
+  T.aura = 2 T.step(0.1)
+  check(s.Ghost.color and s.Ghost.color[1] == 0.85, "a hit leaves a flat red ghost")
+  check(D.Shake.plays >= 1, "and still shakes")
+  T.slash("layout") T.speed = 7.3 T.step(0.6) T.speed = 0 T.step(0.8)
+  check(s.LossSeg.color ~= nil and s.LossSeg.vertex and s.LossSeg.vertex[1] == 0.85, "one bar: the coming loss flat red")
+  T.slash("layout")
+  T.slash("flat")
+  check(not ns.db.flatBar and s.Fill.atlas == "skillbar_fill_flipbook_herbalism" and s.Fill.vertex[1] == 1, "off again: the profession art, untinted")
+  T.aura = 4 T.speed = 7.3 T.step(1)
+  check(D.tick.barTexture == "ui-castingbar-filling-channel", "and the cast bar art again: " .. tostring(D.tick.barTexture))
+  -- the option on the page
+  _G.PlainstrideMinimapButton:Click("LeftButton")
+  local cb for _, w in ipairs(T.frames) do if w.kind == "CheckButton" and w.label and w.label.text == "Flat bars" then cb = w end end
+  check(cb ~= nil, "a Flat bars checkbox on the page")
+  cb.checked = true cb:Click()
+  check(ns.db.flatBar == true and s.Fill.texture == FLAT, "ticking it turns flat bars on")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+scenario('flat bars in Dark take its accent; in EllesmereUI its accent', STYLE + `
+  PlainstrideDB = { style = "dark", flatBar = true }
+  T.login()
+  check(D.stack.Fill.texture == "Interface\\\\Buttons\\\\WHITE8X8" and math.abs(D.stack.Fill.vertex[2] - 0.86) < 0.001, "Dark's accent on the flat fill")
+  check(D.stack.Border.alpha == 0, "and the flattened frame")
+`);
+
+scenario('minimap button: left where a collector puts it, dragged round the rim on the minimap', NS + `
+  T.login()
+-- A minimap button collector (EllesmereUI's, for one) takes the button off the minimap. Neither a
+-- refresh nor a drag tick may put it back on the rim then; on the minimap a drag still moves it.
+do
+  local mm = _G.PlainstrideMinimapButton
+  local function Script(f, e) return f.scripts[e] end
+  local holder = CreateFrame("Frame", nil, UIParent)
+  local own, setPoint = rawget(mm, "SetPoint"), mm.SetPoint
+  local moves, rel = 0, nil
+  rawset(mm, "SetPoint", function(self, ...) moves = moves + 1 rel = select(2, ...) return setPoint(self, ...) end)
+  local center, escale, cursor = rawget(Minimap, "GetCenter"), rawget(Minimap, "GetEffectiveScale"), GetCursorPosition
+  rawset(Minimap, "GetCenter", function() return 500, 500 end)
+  rawset(Minimap, "GetEffectiveScale", function() return 1 end)
+  GetCursorPosition = function() return 600, 560 end
+  -- The game has both: a degree based global atan2 and the radian based math.atan2.
+  local atan2Was, mathAtan2Was = atan2, math.atan2
+  atan2 = atan2 or function(y, x) return math.deg(math.atan(y, x)) end
+  math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+  local function Drag()
+    local start, stop = Script(mm, "OnDragStart"), Script(mm, "OnDragStop")
+    if not start then return false end
+    start(mm)
+    local tick = Script(mm, "OnUpdate")
+    if tick then tick(mm, 0.02) end
+    if stop then stop(mm) end
+    return tick ~= nil
+  end
+  mm:SetParent(holder)
+  Drag()
+  ns.Options.UpdateMinimapButton()
+  check(moves == 0, "minimap: a button a collector (EllesmereUI's) has taken stays where the collector put it")
+  mm:SetParent(Minimap)
+  local dragged = Drag()
+  check(dragged and moves > 0 and rel == Minimap, "minimap: on the minimap a drag still moves it round the rim")
+  rawset(mm, "SetPoint", own)
+  rawset(Minimap, "GetCenter", center)
+  rawset(Minimap, "GetEffectiveScale", escale)
+  GetCursorPosition = cursor
+  atan2, math.atan2 = atan2Was, mathAtan2Was
+end
+`);
+
+
+scenario('the gain and loss bars: their places, the five parts, the loss bar option', NS + `
+  T.login()
+  local function y(w) local p = w.points[1] return p and p[5] end
+  check(y(D.tick) == -33 and y(D.loss) == -48, "the gain bar under the stack bar, the loss bar under the gain bar: " .. tostring(y(D.tick)) .. " " .. tostring(y(D.loss)))
+  check(y(D.tick) - 11 > y(D.loss), "they do not overlap")
+  check(D.frame.height == 63 and D.frame.height >= -y(D.loss) + 11, "the frame keeps the loss bar's room: " .. tostring(D.frame.height))
+  check(D.loss.shown and D.loss.alpha == 0, "the loss bar waits, faded out")
+  check(#D.tick.psMarks == 4, "the gain bar in five parts")
+  for i, m in ipairs(D.tick.psMarks) do
+    local p = m.points[1]
+    check(p and math.abs(p[4] - 441 * i / 5) < 0.01, "part mark " .. i .. " at a fifth: " .. tostring(p and p[4]))
+  end
+  T.slash("lossbar")
+  check(ns.db.lossBar == false and not D.loss.shown and D.frame.height == 48, "/plainstride lossbar: no loss bar, the frame closes up")
+  T.slash("lossbar")
+  check(ns.db.lossBar ~= false and D.loss.shown and D.frame.height == 63, "and back")
+  -- the option on the page, under Flat bars, inside the page
+  _G.PlainstrideMinimapButton:Click("LeftButton")
+  local flatBox, lossBox
+  for _, w in ipairs(T.frames) do
+    if w.kind == "CheckButton" and w.label and w.label.text == "Flat bars" then flatBox = w end
+    if w.kind == "CheckButton" and w.label and w.label.text == "Show the loss bar" then lossBox = w end
+  end
+  check(lossBox ~= nil and lossBox.checked, "a Show the loss bar checkbox, ticked")
+  local fy, ly = flatBox.points[1][3], lossBox.points[1][3]
+  check(ly < fy - 26 - 24 and ly - 26 >= -580, "under Flat bars and its note, inside the page: " .. tostring(ly))
+  lossBox.checked = false lossBox:Click()
+  check(ns.db.lossBar == false and not D.loss.shown, "unticking it hides the loss bar")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+
+
+// ---------------------------------------------------------------------------------------------
+// Replay of the user's recording (2026-10-09, 151.8 s): Plainstride's own moving / standing
+// timeline frame by frame, and every real count change read off the stack bar. The movement is
+// fed in, the real count follows the recording, and the tick model's predictions are checked
+// against the real changes, within a tick.
+const REPLAY = `
+  RUNS = {
+    {"S",0,0.8}, {"M",0.8,26}, {"S",26,26.1}, {"M",26.1,31}, {"S",31,31.1}, {"M",31.1,35.2}, {"S",35.2,35.7}, {"M",35.7,36},
+    {"S",36,36.1}, {"M",36.1,36.5}, {"S",36.5,36.8}, {"M",36.8,37.6}, {"S",37.6,38.1}, {"M",38.1,38.9}, {"S",38.9,39.6}, {"M",39.6,40.1},
+    {"S",40.1,40.5}, {"M",40.5,41.5}, {"S",41.5,41.8}, {"M",41.8,42.9}, {"S",42.9,43}, {"M",43,44.2}, {"S",44.2,44.5}, {"M",44.5,45},
+    {"S",45,45.1}, {"M",45.1,45.5}, {"S",45.5,45.6}, {"M",45.6,46.7}, {"S",46.7,47}, {"M",47,48}, {"S",48,48.4}, {"M",48.4,49.1},
+    {"S",49.1,49.5}, {"M",49.5,51}, {"S",51,51.6}, {"M",51.6,53.9}, {"S",53.9,54.1}, {"M",54.1,57}, {"S",57,57.2}, {"M",57.2,62},
+    {"S",62,62.1}, {"M",62.1,65.6}, {"S",65.6,66.5}, {"M",66.5,67.6}, {"S",67.6,68}, {"M",68,69.7}, {"S",69.7,69.8}, {"M",69.8,70.9},
+    {"S",70.9,71}, {"M",71,71.9}, {"S",71.9,72.1}, {"M",72.1,74.1}, {"S",74.1,74.6}, {"M",74.6,75.5}, {"S",75.5,75.8}, {"M",75.8,76.7},
+    {"S",76.7,76.9}, {"M",76.9,78}, {"S",78,78.3}, {"M",78.3,79.8}, {"S",79.8,79.9}, {"M",79.9,80}, {"S",80,80.1}, {"M",80.1,81.1},
+    {"S",81.1,81.3}, {"M",81.3,83.4}, {"S",83.4,83.6}, {"M",83.6,85.5}, {"S",85.5,85.8}, {"M",85.8,87.1}, {"S",87.1,87.4}, {"M",87.4,88.2},
+    {"S",88.2,88.3}, {"M",88.3,89}, {"S",89,89.4}, {"M",89.4,90}, {"S",90,90.4}, {"M",90.4,91}, {"S",91,91.4}, {"M",91.4,92.2},
+    {"S",92.2,92.4}, {"M",92.4,93.3}, {"S",93.3,93.5}, {"M",93.5,94.2}, {"S",94.2,94.5}, {"M",94.5,95.3}, {"S",95.3,95.4}, {"M",95.4,96.5},
+    {"S",96.5,96.6}, {"M",96.6,97.5}, {"S",97.5,97.7}, {"M",97.7,98.3}, {"S",98.3,98.5}, {"M",98.5,99.2}, {"S",99.2,99.9}, {"M",99.9,100.6},
+    {"S",100.6,101}, {"M",101,101.6}, {"S",101.6,102.4}, {"M",102.4,103.3}, {"S",103.3,103.8}, {"M",103.8,104.7}, {"S",104.7,105.1}, {"M",105.1,105.9},
+    {"S",105.9,106.6}, {"M",106.6,107.4}, {"S",107.4,107.9}, {"M",107.9,108.9}, {"S",108.9,109.3}, {"M",109.3,110.2}, {"S",110.2,110.7}, {"M",110.7,111.5},
+    {"S",111.5,112}, {"M",112,112.8}, {"S",112.8,113.3}, {"M",113.3,114.1}, {"S",114.1,115.6}, {"M",115.6,116.2}, {"S",116.2,116.8}, {"M",116.8,117.6},
+    {"S",117.6,118.4}, {"M",118.4,119}, {"S",119,119.6}, {"M",119.6,120.3}, {"S",120.3,120.9}, {"M",120.9,121.7}, {"S",121.7,122.3}, {"M",122.3,123},
+    {"S",123,123.6}, {"M",123.6,124.4}, {"S",124.4,124.8}, {"M",124.8,125.7}, {"S",125.7,126.1}, {"M",126.1,126.9}, {"S",126.9,127.5}, {"M",127.5,128.2},
+    {"S",128.2,128.9}, {"M",128.9,129.9}, {"S",129.9,130.3}, {"M",130.3,131.4}, {"S",131.4,131.8}, {"M",131.8,132.7}, {"S",132.7,133.2}, {"M",133.2,134.8},
+    {"S",134.8,135.1}, {"M",135.1,136.3}, {"S",136.3,136.6}, {"M",136.6,137.6}, {"S",137.6,138.7}, {"M",138.7,139.6}, {"S",139.6,140.2}, {"M",140.2,141},
+    {"S",141,141.4}, {"M",141.4,142.2}, {"S",142.2,142.6}, {"M",142.6,143.4}, {"S",143.4,144.1}, {"M",144.1,145}, {"S",145,145.6}, {"M",145.6,146.6},
+    {"S",146.6,147.2}, {"M",147.2,148}, {"S",148,148.9},
+  }
+  GAINS = { 6.1, 11.1, 16, 21, 26, 31.1, 36, 45, 57.1, 62.1, 72, 80, 85, 90, 97, 102, 133.1, 138.1 }
+  LOSSES = { 40, 50, 52, 66.9, 75, 91.9, 102.9, 107, 111, 115, 116, 120, 123.9, 127.9, 138.9, 142, 146, 148.9 }
+`;
+
+scenario('replay of the recording: the tick model predicts the real count changes', NS + REPLAY + `
+  local BASE = 1000
+  T.now = BASE - 1
+  T.login()
+  -- a stop as Plainstride showed it began 0.3 s after the speed fell (its stop grace); the
+  -- one-sample stops at a gain were the gain animation, not stops
+  local gainAt = {}
+  for _, g in ipairs(GAINS) do gainAt[string.format("%.1f", g)] = true end
+  local stops = {}
+  for _, r in ipairs(RUNS) do
+    if r[1] == "S" and not (r[3] - r[2] <= 0.11 and gainAt[string.format("%.1f", r[2])]) then
+      stops[#stops + 1] = { r[2] - 0.3, r[3] }
+    end
+  end
+  local function standing(t) if t < 0 then return true end -- the recording starts standing
+    for _, s in ipairs(stops) do if t >= s[1] and t < s[2] then return true end end return false end
+  local function countAt(t)
+    local n = 0
+    for _, g in ipairs(GAINS) do if g <= t then n = n + 1 end end
+    for _, l in ipairs(LOSSES) do if l <= t then n = n - 1 end end
+    return n
+  end
+  local predLoss, predGain = {}, {}
+  -- the bars against the model, every step: the loss bar up (red) while a check has caught you,
+  -- gone when no loss is coming, and the gain bar showing the checks passed, in fifths
+  local pendingFor, noLossFor, lossMissing, lossWrong, gainOff, gainSeen, lastStacks, changedAt = 0, 0, 0, 0, 0, 0, nil, 0
+  local lastDone, doneAt = 0, 0
+  local t = T.now - BASE
+  while t < 151.5 do
+    T.speed = standing(t) and 0 or 7.5
+    local n = countAt(t)
+    T.aura = n > 0 and n or nil
+    T.step(0.05, 0.025)
+    t = T.now - BASE
+    if st.pendingLossAt then predLoss[math.floor(st.pendingLossAt - BASE + 0.5)] = true end
+    local mode, _, left = ns.clocks(T.now, st.stacks)
+    if mode == "gain" and left and left < 0.15 then predGain[math.floor(T.now + left - BASE + 0.5)] = true end
+    if st.stacks ~= lastStacks then lastStacks, changedAt = st.stacks, T.now end
+    local g, l = ns.gainLoss(T.now, st.stacks)
+    pendingFor = st.pendingLossAt and (pendingFor + 0.05) or 0
+    if pendingFor >= 0.15 and not (D.loss.alpha > 0.9 and D.loss.barTexture == "ui-castingbar-interrupted") then lossMissing = lossMissing + 1 end
+    noLossFor = l and 0 or (noLossFor + 0.05)
+    if noLossFor >= 0.4 and D.loss.alpha > 0.01 then lossWrong = lossWrong + 1 end
+    if (st.moveChecks or 0) ~= lastDone then lastDone, doneAt = st.moveChecks or 0, T.now end
+    -- (the bar eases over a frame or two after a change of count)
+    if g.mode == "gain" and T.now - changedAt > 0.2 and T.now - doneAt > 0.1 then
+      gainSeen = gainSeen + 1
+      local done = st.moveChecks or 0
+      if D.tick.value > done / 5 + 0.06 or D.tick.value < (done - 1) / 5 - 0.06 then gainOff = gainOff + 1 end
+    end
+  end
+  local function match(truth, pred)
+    local used, hits, missed = {}, 0, {}
+    for _, tc in ipairs(truth) do
+      local k = math.floor(tc + 0.5)
+      local hit
+      for _, d in ipairs({ 0, -1, 1 }) do
+        if not hit and pred[k + d] and not used[k + d] then hit = k + d end
+      end
+      if hit then used[hit] = true hits = hits + 1 else missed[#missed + 1] = k end
+    end
+    local extra = {}
+    for k in pairs(pred) do if not used[k] then extra[#extra + 1] = k end end
+    table.sort(extra)
+    return hits, missed, extra
+  end
+  local lh, lm, lx = match(LOSSES, predLoss)
+  local gh, gm, gx = match(GAINS, predGain)
+  REPLAY_RESULT = string.format("losses %d/%d (missed %s; extra %s), gains %d/%d (missed %s; extra %s)",
+    lh, #LOSSES, table.concat(lm, " "), table.concat(lx, " "), gh, #GAINS, table.concat(gm, " "), table.concat(gx, " "))
+  DEFAULT_CHAT_FRAME:AddMessage("replay: " .. REPLAY_RESULT)
+  check(lh >= 17, "losses predicted within a tick: " .. REPLAY_RESULT)
+  check(gh >= 16, "gains predicted within a tick: " .. REPLAY_RESULT)
+  check(#lx + #gx <= 8, "few predictions that did not happen: " .. REPLAY_RESULT)
+  check(lossMissing == 0, "the loss bar is up, red, whenever a check has caught you: " .. lossMissing .. " steps without it")
+  check(lossWrong == 0, "and gone when no loss is coming: " .. lossWrong .. " steps with it")
+  check(gainSeen > 500 and gainOff == 0, "the gain bar shows the checks passed, in fifths: " .. gainOff .. " of " .. gainSeen .. " steps off")
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+
+
+scenario('stutter step: a step taken after the check does not save the stack, and the bar keeps saying so', NS + `
+  T.now = 2000
+  T.login()
+  T.aura = 6 T.speed = 7.4
+  T.step(1.0)
+  T.aura = 7 T.step(0.06) -- a real gain: the tick is at about 2001.0
+  T.step(0.9)            -- moving through the next check
+  local mode = ns.clocks(T.now, st.stacks)
+  check(mode == "gain", "moving: next stack: " .. tostring(mode))
+  -- stop just before a tick, stand through its check, then step again
+  T.speed = 0 T.step(0.4) -- standing from about 2002.3 (0.3 s to notice): too late for the check of 2002
+  check(st.pendingLossAt == nil, "stopped after the check: nothing coming yet")
+  -- both bars at once: the gain bar keeps the checks passed, the loss bar warns (gold)
+  T.step(0.1)
+  check(D.tick.value >= 0.19 and D.tick.Text.text:find("Next stack"), "the gain bar keeps its progress through the stop: " .. tostring(D.tick.value))
+  check(D.loss.alpha > 0.5 and D.loss.barTexture == "ui-castingbar-filling-standard" and D.loss.Text.text:find("Losing a stack"),
+    "and the loss bar warns, gold, under it: " .. tostring(D.loss.alpha) .. " " .. tostring(D.loss.barTexture))
+  T.step(0.9)             -- the check of 2003 decided at about 2003.3
+  check(st.pendingLossAt ~= nil, "standing through the check: a loss is coming")
+  T.speed = 7.4 T.step(0.1)
+  local m2, _, left = ns.clocks(T.now, st.stacks)
+  check(m2 == "decay" and left and left > 0 and left < 1, "moving again, the bar still counts down to the loss: " .. tostring(m2) .. " " .. tostring(left))
+  check(D.loss.alpha > 0.9 and D.loss.barTexture == "ui-castingbar-interrupted" and D.loss.Text.text:find("Losing a stack"), "the loss bar holds, red, while you move")
+  check(D.tick.value < 0.25 and D.tick.Text.text:find("Next stack"), "the gain bar started its count again: " .. tostring(D.tick.value))
+  T.step(0.48)
+  T.aura = 6 T.step(0.06)
+  check(ns.db.log[#ns.db.log].kind == "decay", "the loss lands as a decay, not a hit: " .. tostring(ns.db.log[#ns.db.log].kind))
+  check(D.Shake.plays == 0, "no shake for it")
+  -- the count of checks starts again from the loss: five moving checks for the next stack
+  local _, _, gl = ns.clocks(T.now, st.stacks)
+  check(gl and gl > 4 and gl <= 5.1, "the next stack is five ticks away: " .. tostring(gl))
+  check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
+`);
+
+
+scenario('with no stacks, standing through a check starts the count of moving checks again', NS + `
+  T.now = 3000
+  T.login()
+  T.aura = nil T.speed = 7.4
+  T.step(3.0)
+  check((st.moveChecks or 0) >= 2, "moving checks counted: " .. tostring(st.moveChecks))
+  T.speed = 0 T.step(1.6)
+  check((st.moveChecks or 0) == 0, "a standing check starts the count again: " .. tostring(st.moveChecks))
   check(#T.errors == 0, "no errors: " .. tostring(T.errors[1]))
 `);
 

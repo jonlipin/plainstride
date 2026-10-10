@@ -10,7 +10,7 @@ ns.Options = O
 
 local TITLE = "Plainstride"
 local ICON = 236717 -- Plainsrunning's own icon (SpellMisc.SpellIconFileDataID)
-local W, H = 600, 520
+local W, H = 600, 580
 
 local content, window, settingsPage, settingsCategory
 local nativeOpenFailed = false
@@ -94,6 +94,7 @@ local function Slider(parent, label, x, y, width, minV, maxV, step, get, set, fm
         slider.syncing = false
         value:SetText(string.format(fmt, v))
     end
+    slider.holder, slider.caption, slider.valueText = holder, caption, value
     return slider
 end
 
@@ -161,6 +162,13 @@ local function BuildContent()
         function() return db().hideInCombat ~= false end,
         function(v) db().hideInCombat = v if ns.refreshVisibility then ns.refreshVisibility() end end,
         "The game hides the buff from addons in a fight. Off: the bar stays, frozen at your last count.")
+    Check(c, "Flat bars", L, -494,
+        function() return db().flatBar end,
+        function(v) db().flatBar = v D.ApplyFill() end,
+        "One plain color instead of the profession and cast bar art, in any window style. Gains, losses and wind streaks still move.")
+    Check(c, "Show the loss bar", L, -550,
+        function() return db().lossBar ~= false end,
+        function(v) db().lossBar = v D.Layout() end)
 
     Heading(c, "Other", R, -44)
     Check(c, "Minimap button", R, -66,
@@ -196,7 +204,7 @@ local function BuildContent()
     Check(c, "Dock under the player frame", R, -218,
         function() return db().dock end,
         function(v) db().dock = v D.Layout() end,
-        "As wide as your player frame, right under it. Off: where you dragged it.")
+        "Under your player frame, or EllesmereUI's, as wide as it. Off: where you dragged it.")
 
     Check(c, "Wind streaks", R, -258,
         function() return db().streaks ~= false end,
@@ -223,6 +231,51 @@ local function BuildContent()
         status:SetText(string.format("Now: %s stacks, %s.\n/plainstride debug prints the details.",
             st.stacks and tostring(st.stacks) or "no", where))
     end
+
+    -- Window style (Styles.lua). This page keeps the game's look in every style.
+    local Styles = ns.Styles
+    Heading(c, "Look", R, -440)
+    local styleButton = TryCreate("Button", nil, c, { "UIPanelButtonTemplate" })
+    styleButton:SetSize(200, 24)
+    styleButton:SetPoint("TOPLEFT", R + 4, -462)
+    styleButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    local styleNote = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    styleNote:SetPoint("TOPLEFT", R + 6, -490)
+    styleNote:SetWidth(260)
+    styleNote:SetJustifyH("LEFT")
+    local opacity = Slider(c, "Dark background opacity", R + 4, -516, 260, 0, 100, 5,
+        function() return math.floor((db().darkAlpha or 0.92) * 100 + 0.5) end,
+        function(v) db().darkAlpha = v / 100 Styles.SetDarkAlpha(db().darkAlpha) end, "%d%%")
+    refreshers[#refreshers + 1] = function()
+        styleButton:SetText("Window style: " .. Styles.Name(db().style))
+        styleNote:SetText(Styles.Note())
+        local dark = db().style == "dark"
+        opacity:SetEnabled(dark)
+        opacity.holder:SetAlpha(dark and 1 or 0.5)
+        opacity.caption:SetFontObject(dark and GameFontHighlight or GameFontDisable)
+        opacity.valueText:SetFontObject(dark and GameFontNormal or GameFontDisable)
+    end
+    styleButton:SetScript("OnClick", function(_, button)
+        Styles.Cycle(button == "RightButton" and -1 or 1)
+        Refresh()
+    end)
+    styleButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Window style", 1, 1, 1)
+        for _, line in ipairs(Styles.HELP) do GameTooltip:AddLine(line, nil, nil, nil, true) end
+        GameTooltip:AddLine("The bar keeps its animated fill in every style; Dark and EllesmereUI give it a dark track with a thin edge instead of the profession frame. This page keeps the game's look.", nil, nil, nil, true)
+        GameTooltip:AddLine("Left-click for the next style, right-click for the previous one.", 0.6, 0.6, 0.6, true)
+        GameTooltip:Show()
+    end)
+    styleButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    opacity:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Dark background opacity", 1, 1, 1)
+        GameTooltip:AddLine("How much of the world shows through the Dark style's windows.", nil, nil, nil, true)
+        if db().style ~= "dark" then GameTooltip:AddLine("Applies to the Dark style only.", 1, 0.82, 0, true) end
+        GameTooltip:Show()
+    end)
+    opacity:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     local version = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     version:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -8, 4)
@@ -292,8 +345,14 @@ local function BuildWindow()
         local close = TryCreate("Button", nil, f, { "UIPanelCloseButton" })
         close:SetPoint("TOPRIGHT", 2, 2)
         close:SetScript("OnClick", function() f:Hide() end)
+        f.psClose = close
     end
+    -- The template's own X goes through HideUIPanel, which the game can refuse in combat, and this
+    -- window is the one used in combat: it hides the window itself.
+    local x = f.CloseButton or _G["PlainstrideOptionsCloseButton"]
+    if x and x.SetScript then x:SetScript("OnClick", function() f:Hide() end) end
     f:SetScript("OnShow", function(self) Host(self, 14, top, 1) end)
+    if ns.SkinWindow then ns.SkinWindow(f) end
     return f
 end
 
@@ -343,6 +402,10 @@ end
 function O.RegisterPage()
     if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then return end
     local page = CreateFrame("Frame")
+    -- Hidden until the game's panel shows it: a frame made without a parent is shown and counts
+    -- as visible, so parenting it into an open panel and calling Show would not run OnShow, and the
+    -- first visit from Esc > Options > AddOns would find the page empty (Range Lens did).
+    page:Hide()
     local title = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
     title:SetText(TITLE)
@@ -370,6 +433,9 @@ local function PlaceMinimapButton()
     if not mmButton then return end
     local angle = math.rad(db().minimapAngle or 220)
     local radius = (Minimap:GetWidth() or 140) / 2 + 6
+    -- Only while it sits on the minimap. A button collector (EllesmereUI's, for one) that
+    -- has taken the button keeps it where it put it.
+    if mmButton:GetParent() ~= Minimap then return end
     mmButton:ClearAllPoints()
     mmButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end

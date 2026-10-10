@@ -21,10 +21,7 @@ local PASSIVE_ID = 1259918
 local MAX_STACKS = 30
 local GAIN_TICK = 5         -- seconds of moving per stack (the tooltip's $s2)
 local DECAY_TICK = 1        -- the passive's period: one stack per beat while standing
-local DECAY_GRACE = 1       -- the first stack goes no sooner than this after you stop
-local DECAY_UNKNOWN = 1.5   -- first loss when the beat has not been seen yet (measured 1.45 to 2.07)
 local MOVE_GRACE = 0.3      -- a zero speed shorter than this is a strafe or a turn, not a stop
-local OVERDUE_HOLD = 0.6    -- a gain that is due but not in yet: hold the bar full this long
 local POLL = 0.05           -- how often the client is asked (the drawing runs every frame)
 local LOG_MAX = 60
 
@@ -38,6 +35,7 @@ local defaults = {
     showCount = true,     -- "Plainsrunning 12 / 30" in the middle of the bar
     fadeEmpty = false,    -- fade the bar right out at 0 stacks while standing
     fill = "herbalism",   -- which profession bar's animated fill (Display FILLS)
+    flatBar = false,      -- plain one-color fills instead of the profession and cast bar art
     hitMarker = true,     -- mark where one hit would leave you (half your stacks)
     tooltip = true,       -- stacks, countdown and the rules on hover
     dock = false,         -- sit under the player frame, as wide as it
@@ -46,6 +44,9 @@ local defaults = {
     streaks = true,       -- wind streaks through the fill while running
     streakDir = "right",  -- wind streaks: "right" (toward the next stack) or "left" (rushing past you)
     layout = "two",       -- "two": stack bar + cast bar under it; "one": the countdown inside the stack bar
+    lossBar = true,       -- two bars: a loss bar under the gain bar while a loss is coming
+    style = "auto",       -- window style: "auto" (EllesmereUI when it runs), "blizzard" or "dark" (Styles.lua)
+    darkAlpha = 0.92,     -- the Dark style's window background opacity
     minimap = true,
     minimapAngle = 220,
     point = { "BOTTOM", "UIParent", "BOTTOM", 0, 260 },
@@ -128,17 +129,6 @@ local function beatPhase()
     end
     local a = math.atan2 and math.atan2(sy, sx) or math.atan(sy, sx)
     return (a / (2 * math.pi)) % 1
-end
-
--- The first beat at or after t.
-local function snapToBeat(t)
-    local phase = beatPhase()
-    if not phase then return nil end
-    local tick = decayTick()
-    local base = math.floor(t / tick) * tick + phase * tick
-    while base < t - 1e-6 do base = base + tick end
-    while base - tick >= t - 1e-6 do base = base - tick end
-    return base
 end
 
 ------------------------------------------------------------------------
@@ -243,6 +233,7 @@ local function updateMoving(now, current)
     end
     if going then
         state.zeroSince = nil
+        state.standAt = nil
         if not state.moving then
             state.moving = true
             state.startAt = now
@@ -251,53 +242,214 @@ local function updateMoving(now, current)
         state.zeroSince = state.zeroSince or now
         if state.moving and now - state.zeroSince >= MOVE_GRACE then
             state.moving = false
+            state.standAt = now -- from here the bar shows you standing (the tick model's input)
             state.stopAt = state.zeroSince -- you stopped when the speed did
             state.lastDecayAt = nil
         elseif not state.stopAt then
             state.stopAt = now
         end
+        if not state.moving and not state.standAt then state.standAt = now end
     end
 end
 
 ------------------------------------------------------------------------
 -- The clocks: where the next stack comes or goes
 ------------------------------------------------------------------------
--- returns mode ("gain", "decay", "max", "idle", "hold"), bar fill 0..1, seconds left or nil
-local function clocks(now, stacks)
+-- The demo's scripted clocks (it sets its own gaps).
+local function demoClocks(now, stacks)
     stacks = stacks or 0
-    if state.moving or (state.zeroSince and now - state.zeroSince < MOVE_GRACE and state.moving) then
+    if state.moving then
         if stacks >= MAX_STACKS then return "max", 1, nil end
         local tick = gainTick()
-        local anchor = state.lastGainAt
-        if not anchor or now - anchor > 60 then anchor = state.startAt or now end
+        local anchor = state.lastGainAt or state.startAt or now
         local since = math.max(0, now - anchor)
-        local cycles = math.floor(since / tick)
-        local into = since - cycles * tick
-        -- Due but not in yet: say "any moment" instead of starting the next cycle.
-        if cycles >= 1 and into < OVERDUE_HOLD and state.lastGainAt == anchor
-            and (state.startAt or 0) <= now - into then
-            return "gain", 1, 0
-        end
+        local into = since - math.floor(since / tick) * tick
         return "gain", into / tick, tick - into
     end
     if stacks <= 0 then return "idle", 0, nil end
-    local due, from
-    local stopAt = state.stopAt or now
-    if state.lastDecayAt and state.lastDecayAt >= stopAt then
-        from = state.lastDecayAt
-        due = from + decayTick()
-    else
-        from = stopAt
-        due = (state.demo and (stopAt + decayTick())) or snapToBeat(stopAt + DECAY_GRACE) or (stopAt + DECAY_UNKNOWN)
-    end
-    local span = math.max(0.05, due - from)
+    local from = (state.lastDecayAt and state.lastDecayAt >= (state.stopAt or now)) and state.lastDecayAt or (state.stopAt or now)
+    local due = from + decayTick()
     local left = due - now
     if left <= 0 then return "decay", 0, 0 end
-    return "decay", clamp(left / span, 0, 1), left
+    return "decay", clamp(left / math.max(0.05, due - from), 0, 1), left
+end
+
+------------------------------------------------------------------------
+-- The tick model, fitted to a frame-by-frame recording of the real count (2026-10-09, 36
+-- changes, while the player ran, stopped and stutter-stepped):
+--   * the game changes the count only on its 1 second tick;
+--   * just after each tick the game checks you once. Standing at the check (and still 0.2 s
+--     later) costs a stack on the NEXT tick, and the count below starts again; a step taken
+--     after the check does not save it. Stand through every check and you lose one a second;
+--     the first comes 1 to 2 seconds after you stop;
+--   * every other check counts toward a stack (the tooltip's "every 5 sec spent moving"): the
+--     fifth since the last change gives one on the next tick. Short stops between checks
+--     neither pause nor reset it;
+--   * the check made on the tick of a loss only counts if you also stood through the check
+--     before it (a stop that began after a loss does not cost again at once).
+-- Replayed through the addon (tests/plainstridetest.js), it predicts 17 of the 18 losses and 16 of
+-- the 18 gains within a tick, with 7 early or false loss warnings.
+-- The misses are stops within a tenth of a second of a check. Every real change re-anchors it.
+-- SAMPLE_AT is measured from the tick as the addon learns it (from the changes it sees).
+------------------------------------------------------------------------
+local TM = { SAMPLE_AT = 0.05, SAMPLE_HOLD = 0.2, SLACK = POLL, GAIN_TICKS = 5, LATE = 0.6 }
+ns.TM = TM
+
+-- The tick phase (seconds past the whole second) and whether it is known from real changes.
+function TM.phase()
+    local p = beatPhase()
+    if p then return p, true end
+    return 0, false
+end
+-- The last tick at or before t, the next at or after it, and the nearest.
+function TM.prev(t)
+    local p = TM.phase()
+    return math.floor(t - p + 1e-6) + p
+end
+function TM.next(t)
+    local k = TM.prev(t)
+    if k < t - 1e-6 then k = k + 1 end
+    return k
+end
+function TM.nearest(t)
+    local k = TM.prev(t)
+    if t - k > 0.5 then k = k + 1 end
+    return k
+end
+
+-- A real count change at `now`: the checks count again from its tick.
+function TM.realChange(now, step)
+    local k = TM.nearest(now)
+    -- the phase may just have moved with this change: line the decided ticks up with it
+    if state.sampledTick then state.sampledTick = TM.nearest(state.sampledTick) end
+    -- the check of this tick (just after it) is the first of the new count
+    if not state.sampledTick or state.sampledTick > k - 1 + 0.5 then state.sampledTick = k - 1 end
+    state.moveChecks = 0
+    state.pendingGainAt = nil
+    if step < 0 then state.lossTick = k end
+    if state.pendingLossAt and (step < 0 or math.abs(state.pendingLossAt - k) < 0.5) then state.pendingLossAt = nil end
+    state.missedGain, state.missedLoss = nil, nil
+end
+
+-- Each poll: decide the checks whose hold has passed, and notice predictions that did not come
+-- true. A check finds you standing (you stood at it and for its hold) or moving.
+function TM.update(now, stacks)
+    stacks = stacks or 0
+    local c = TM.prev(now - TM.SAMPLE_AT - TM.SAMPLE_HOLD)
+    if not state.sampledTick or c > state.sampledTick + 0.5 then
+        -- only the latest one if several went by (a hitch, a loading screen)
+        state.sampledTick = c
+        local t = c + TM.SAMPLE_AT
+        -- one poll of slack: the bar notices a stop up to a poll late
+        local standing = not state.moving and state.standAt ~= nil and state.standAt <= t + TM.SLACK + 1e-6
+        if standing and state.lossTick and math.abs(state.lossTick - c) < 0.5 and state.standAt > t - 1 + TM.SLACK + 1e-6 then
+            standing = false
+        end
+        if standing then
+            if stacks > 0 then state.pendingLossAt = c + 1 end
+            state.moveChecks, state.pendingGainAt = 0, nil
+        else
+            state.moveChecks = (state.moveChecks or 0) + 1
+            if state.moveChecks >= TM.GAIN_TICKS and stacks < MAX_STACKS then state.pendingGainAt = c + 1 end
+        end
+    end
+    -- Predicted, but the count did not move: the real count wins, the estimate is marked.
+    if state.pendingLossAt and now > state.pendingLossAt + TM.LATE then
+        state.pendingLossAt, state.missedLoss = nil, true
+    end
+    if state.pendingGainAt and now > state.pendingGainAt + TM.LATE then
+        state.pendingGainAt, state.moveChecks, state.missedGain = nil, 0, true
+    end
+end
+
+-- Standing now: the next check you stand through costs a stack on the tick after it. Returns the
+-- seconds to that loss and how much of the wait from your stop is left (0..1).
+function TM.standingLoss(now)
+    local nextCheck = (state.sampledTick or TM.prev(now)) + 1
+    local cTick = math.max(TM.prev(now - TM.SAMPLE_AT), nextCheck)
+    if not (state.standAt and state.standAt <= cTick + TM.SAMPLE_AT + TM.SLACK + 1e-6) then cTick = cTick + 1 end
+    if state.lossTick and math.abs(state.lossTick - cTick) < 0.5 and state.standAt
+        and state.standAt > cTick + TM.SAMPLE_AT - 1 + TM.SLACK + 1e-6 then cTick = cTick + 1 end
+    local lossAt = cTick + 1
+    local from = math.min(state.standAt or now, now)
+    local left = math.max(0, lossAt - now)
+    return left, clamp(left / math.max(0.05, lossAt - from), 0, 1)
+end
+
+-- returns mode ("gain", "decay", "max", "idle"), bar fill 0..1, seconds left (or nil), estimated
+local function clocks(now, stacks)
+    if state.demo then return demoClocks(now, stacks) end
+    stacks = stacks or 0
+    local _, known = TM.phase()
+    local estimated = not known or state.missedGain == true or state.missedLoss == true
+    local done = state.moveChecks or 0
+    -- the next check not decided yet, and the tick a stack comes if every check from there finds you moving
+    local nextCheck = (state.sampledTick or TM.prev(now)) + 1
+    local gainAt = state.pendingGainAt or (nextCheck + math.max(0, TM.GAIN_TICKS - done))
+    if state.pendingLossAt and stacks > 0 then
+        -- checked standing: the stack goes on this tick, whatever you do now
+        local left = math.max(0, state.pendingLossAt - now)
+        return "decay", clamp(left / (1 - TM.SAMPLE_AT - TM.SAMPLE_HOLD), 0, 1), left, estimated
+    end
+    if not state.moving and stacks > 0 and not state.pendingGainAt then
+        local left, frac = TM.standingLoss(now)
+        return "decay", frac, left, estimated
+    end
+    if stacks >= MAX_STACKS then return "max", 1, nil, estimated end
+    if stacks <= 0 and not state.moving then return "idle", clamp(done / TM.GAIN_TICKS, 0, 1), nil, estimated end
+    local left = math.max(0, gainAt - now)
+    return "gain", clamp(1 - left / TM.GAIN_TICKS, 0, 1), left, estimated
 end
 ns.clocks = clocks
+
+-- The two clocks apart, for the two bars: the gain clock always, the loss clock only while a loss
+-- is coming. gain = { mode = "gain" | "max" | "idle", frac, left, est, done }; loss = nil or
+-- { frac, left, certain (a check caught you), est }.
+local gainOut, lossOut = {}, {}
+function ns.gainLoss(now, stacks)
+    stacks = stacks or 0
+    if state.demo then
+        local mode, frac, left = demoClocks(now, stacks)
+        gainOut.mode, gainOut.frac, gainOut.left, gainOut.est, gainOut.done = (mode == "decay") and "idle" or mode,
+            (mode == "gain" or mode == "max") and frac or 0, (mode == "gain") and left or nil, false, 0
+        if mode == "decay" then
+            lossOut.frac, lossOut.left, lossOut.certain, lossOut.est = frac, left, (left or 1) < 0.35, false
+            return gainOut, lossOut
+        end
+        return gainOut, nil
+    end
+    local _, known = TM.phase()
+    local done = state.moveChecks or 0
+    local nextCheck = (state.sampledTick or TM.prev(now)) + 1
+    local gainAt = state.pendingGainAt or (nextCheck + math.max(0, TM.GAIN_TICKS - done))
+    gainOut.est, gainOut.done = (not known) or state.missedGain == true, done
+    if stacks >= MAX_STACKS then
+        gainOut.mode, gainOut.frac, gainOut.left = "max", 1, nil
+    elseif stacks <= 0 and not state.moving then
+        gainOut.mode, gainOut.frac, gainOut.left = "idle", clamp(done / TM.GAIN_TICKS, 0, 1), nil
+    else
+        local left = math.max(0, gainAt - now)
+        gainOut.mode, gainOut.frac, gainOut.left = "gain", clamp(1 - left / TM.GAIN_TICKS, 0, 1), left
+    end
+    if stacks <= 0 then return gainOut, nil end
+    lossOut.est = (not known) or state.missedLoss == true
+    if state.pendingLossAt then
+        local left = math.max(0, state.pendingLossAt - now)
+        lossOut.frac, lossOut.left, lossOut.certain = clamp(left / (1 - TM.SAMPLE_AT - TM.SAMPLE_HOLD), 0, 1), left, true
+        return gainOut, lossOut
+    end
+    if not state.moving then
+        lossOut.left, lossOut.frac = TM.standingLoss(now)
+        lossOut.certain = false
+        return gainOut, lossOut
+    end
+    return gainOut, nil
+end
 ns.clamp, ns.ask, ns.inCombat, ns.print = clamp, ask, inCombat, print
 ns.MAX_STACKS, ns.BUFF_ID, ns.VERSION, ns.defaults = MAX_STACKS, BUFF_ID, VERSION, defaults
+-- for Plainstride_Skins.lua: the settings, and where its status lines go
+function ns.DB() return db end
+ns.report = {}
 
 -- The display lives in Display.lua (ns.Display).
 
@@ -352,6 +504,7 @@ local function setStacks(now, n, source)
     if source ~= "demo" and kind ~= "hit" then
         push(state.beats, now % 1, 8)
     end
+    if source ~= "demo" then TM.realChange(now, step) end
     if source ~= "demo" then logChange(now, before, n, kind) end
     ns.Display.Animate(before, n, kind, now)
 end
@@ -419,6 +572,7 @@ local function poll(now)
     if aura ~= nil then
         setStacks(now, aura, "aura")
     end
+    TM.update(now, state.stacks)
 end
 
 local function onUpdate(self, elapsed)
@@ -511,6 +665,8 @@ events:SetScript("OnEvent", function(self, event, arg1)
         -- start over from what the buff says now: no gain, loss or hit animation for the fight
         state.stacks, state.source = nil, "none"
         state.lastGainAt, state.lastDecayAt, state.beats = nil, nil, {}
+        state.moveChecks, state.pendingLossAt, state.pendingGainAt, state.sampledTick, state.lossTick = 0, nil, nil, nil, nil
+        state.missedGain, state.missedLoss = nil, nil
         state.lastPoll = 0
         if not state.demo then poll(GetTime()) end
         refreshVisibility()
@@ -536,6 +692,10 @@ local function describe()
     local secrecy = ask(C_Secrets and C_Secrets.GetSpellAuraSecrecy, BUFF_ID)
     print(string.format("client: auras secret %s, stats secret %s, buff secrecy %s, combat %s, tauren %s.",
         tostring(secretAuras), tostring(secretStats), tostring(secrecy), tostring(inCombat()), tostring(isTauren())))
+    print("skin: " .. tostring(ns.report.skin or "?") .. ", Dark opacity " .. tostring(db.darkAlpha) .. ".")
+    for k, v in pairs(ns.report) do
+        if type(k) == "string" and k:find("^skin error") then print(k .. ": " .. tostring(v)) end
+    end
     local last = db.log[#db.log]
     if last then
         print(string.format("last change: %s -> %s (%s, %s)%s.", tostring(last.from), tostring(last.to), last.kind, last.src,
@@ -571,7 +731,7 @@ function ns.printLog(count)
 end
 
 local function help()
-    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | background <0-1> | count | timer | fade | fill [name] | combat | streaks [left|right] | marker | tooltip | dock | log [N] | layout | minimap | demo | reset | debug")
+    print("/plainstride opens the options. Also: lock | unlock | scale <0.4-2> | idle <0-1> | background <0-1> | count | timer | fade | fill [name] | flat | combat | streaks [left|right] | marker | tooltip | dock | log [N] | layout | lossbar | style [auto|blizzard|dark] | minimap | demo | reset | debug")
 end
 
 SLASH_PLAINSTRIDE1 = "/plainstride"
@@ -616,6 +776,18 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.layout = (db.layout == "one") and "two" or "one"
         D.Layout()
         print(db.layout == "one" and "one bar: the countdown runs inside the stack bar." or "two bars: the stack bar with the cast bar under it.")
+    elseif cmd == "style" then
+        local Styles = ns.Styles
+        local arg = string.lower(rest or "")
+        if arg == "auto" or arg == "automatic" then Styles.Set("auto")
+        elseif arg == "blizzard" or arg == "dark" then Styles.Set(arg)
+        elseif arg == "" then Styles.Cycle(1)
+        else print("styles: auto, blizzard, dark.") return end
+        print("window style: " .. Styles.Name(db.style) .. ". " .. Styles.Note())
+    elseif cmd == "lossbar" then
+        db.lossBar = db.lossBar == false
+        D.Layout()
+        print(db.lossBar and "the loss bar shows under the gain bar while a loss is coming." or "no loss bar.")
     elseif cmd == "minimap" then
         db.minimap = not db.minimap
         ns.Options.UpdateMinimapButton()
@@ -631,6 +803,10 @@ SlashCmdList.PLAINSTRIDE = function(msg)
         db.fill = pick.key
         D.ApplyFill()
         print("bar texture: " .. pick.name .. ".")
+    elseif cmd == "flat" then
+        db.flatBar = not db.flatBar
+        D.ApplyFill()
+        print(db.flatBar and "flat bars: one plain color." or "bars in Blizzard's art again.")
     elseif cmd == "combat" then
         db.hideInCombat = not db.hideInCombat
         refreshVisibility()
@@ -651,8 +827,8 @@ SlashCmdList.PLAINSTRIDE = function(msg)
     elseif cmd == "dock" then
         db.dock = not db.dock
         D.Layout()
-        if db.dock and not PlayerFrame then print("there is no player frame to dock under.")
-        else print(db.dock and "docked under the player frame." or "undocked: back where you put it.") end
+        if db.dock and not D.DockTarget() then print("there is no player frame to dock under.")
+        else print(db.dock and (D.DockTarget() ~= PlayerFrame and "docked under EllesmereUI's player frame." or "docked under the player frame.") or "undocked: back where you put it.") end
     elseif cmd == "log" then
         ns.printLog(n or 10)
     elseif cmd == "debug" then
